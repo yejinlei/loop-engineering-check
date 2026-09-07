@@ -2,18 +2,19 @@
 
 本文件是 `SKILL.md` 不变式表的**正向面对**：不变式表回答「缺什么会怎样」，本文件回答「做得好的长什么样、怎么搬过去」。
 
-做法来自**两个真实案例**，全部锚点均为 `[源码确认]`，核验日期 **2026-09-07**。没有一条是设计意图推测。
+做法来自**五个真实案例**，全部锚点均为 `[源码确认]`，核验日期 **2026-09-07**（案例 1–2）与 **2026-09-08**（案例 3–5）。没有一条是设计意图推测。
 
-| | 案例 1 · 自研 BSP 波次编排引擎 | 案例 2 · deepseek-harness |
-|---|---|---|
-| 定位 | 匿名（按用户要求脱敏）的本地教学代码库 | [公开仓库](https://github.com/deepseek-ai/deepseek-harness)，TypeScript，构建在 Cordis 插件框架上 |
-| 登记 | `references/framework-map.md`「自研 loop」一节 | 本文件「案例 2」一节 |
-| 产出 | 模式 1–17：11 条做法 + 6 条缺陷反例 | 模式 18–24：4 条做法 + 3 条反例 |
-| 强项 | 状态合并规则、循环终态区分、审批分层 | 重试退避、配置不变量、事件持久化 |
+| | 案例 1 · 自研 BSP 波次编排引擎 | 案例 2 · deepseek-harness | 案例 3 · pi | 案例 4 · OpenHarness | 案例 5 · harness/harness |
+|---|---|---|---|---|---|
+| 定位 | 匿名（按用户要求脱敏）的本地教学代码库 | [公开仓库](https://github.com/deepseek-ai/deepseek-harness)，TypeScript，Cordis 插件框架 | [公开仓库](https://github.com/earendil-works/pi)，TypeScript，通用 agent 运行时 | [公开仓库](https://github.com/HKUDS/OpenHarness)，Python，agent 运行时 | [公开仓库](https://github.com/harness/harness)，Go，**非 LLM** 的 CI/CD 平台 |
+| 产出 | 模式 1–17：11 条做法 + 6 条缺陷反例 | 模式 18–23：6 条做法；模式 24：3 条反例合集 | 模式 25–31：7 条做法 | 模式 32–34：3 条做法；模式 35：3 条反例（含 1 条正例） | 模式 36–39：4 条做法；模式 40：1 条反例 |
+| 强项 | 状态合并规则、循环终态区分、审批分层 | 重试退避、配置不变量、事件持久化 | 流式完整性、批终止语义、恢复与清理 | 终态可区分、预算记账、非对称钳制 | 领域泛化证据、唤醒兜底、终态编码 |
 
-两个案例互补：案例 1 在状态与循环控制上最扎实，但在预算与重试上全空；案例 2 在预算与重试上最扎实，却**自文档化**了「无内建轮次预算」。**「没有内建预算」不是批评，是设计选择**——它写在 Known Limitations 里，所以是反例（可参照的边界），不是缺陷指控。
+五个案例互补而非互证：案例 1 在状态与循环控制上最扎实，但在预算与重试上全空；案例 2 在预算与重试上最扎实，却**自文档化**了「无内建轮次预算」；案例 3 在流式完整性与恢复语义上最扎实，是全库唯一把「为什么」写进注释的项目；案例 4 给出了 L1「三条终态」里缺失的那一条（无上限退出）；案例 5 **不是 LLM 项目**，它证明了这组不变式是调度类系统的通用属性，不是 LLM 特有。
 
-**引法有两条，要求不同：** 引「做法」可以直接迁移，不需要版本确认；引「行号」要先确认目标项目是否同一版本——案例 1 是小型教学代码库，案例 2 是活跃迭代的上游 `master`，两者的行号都会在迭代中漂移。
+**「没有内建预算」不是批评，是设计选择**——它写在 Known Limitations 里，所以是反例（可参照的边界），不是缺陷指控。
+
+**引法有两条，要求不同：** 引「做法」可以直接迁移，不需要版本确认；引「行号」要先确认目标项目是否同一版本——案例 1 是小型教学代码库，案例 2–5 都是活跃迭代的上游主分支（`master` / `main`），行号都会在迭代中漂移。
 
 ## 0. 总纲：把错误变成不可表达，而不是写成检查
 
@@ -561,48 +562,573 @@ if (policy.mode === 'always') {
 
 ---
 
+## 案例 3 · pi（2026-09-08 上游 `main` 源码核验）
+
+来源：[github.com/earendil-works/pi](https://github.com/earendil-works/pi)。agent loop 在 `packages/agent/src/`，重试与恢复拆在 `packages/ai/src/utils/retry.ts` 与 `packages/agent/src/harness/runtime/drive/`。这是全库注释最诚实的一个案例——多处注释直接写出「这一行是为了挡哪种具体的坏情况」。
+
+## 模式 25 · 被截断的工具调用整批判失败，一条都不执行
+
+**服务的不变式：** M7、M10
+
+**做法：** `packages/agent/src/agent-loop.ts`：
+
+```ts
+// A "length" stop means the output was cut off by the token limit, so
+// every tool call in the message may carry truncated arguments. Fail
+// them all instead of executing potentially borked calls.
+const executedToolBatch =
+	message.stopReason === "length"
+		? await failToolCallsFromTruncatedMessage(toolCalls, emit)
+		: await executeToolCalls(currentContext, message, config, signal, emit);
+```
+
+`failToolCallsFromTruncatedMessage` 的注释把原因写成了本案例最有信息量的一句：
+
+> Streamed tool-call arguments are finalized with a best-effort JSON salvage parser, so a truncated message can yield tool calls whose arguments parse and validate but are silently incomplete. None of them are safe to execute; report each as an error so the model can re-issue them.
+
+**为什么值得学：** 案例 1 模式 13 记录的反例是「截断的参数被静默换成空字典，工具照跑」。pi 面对的是同一个问题，但更难——**它有一个 best-effort 抢救解析器，所以截断的参数能通过 schema 校验**。校验层全绿，语义层全错。这种情况下单点修复（校验参数、检查 `stop_reason`）都不够：**只有 `stop_reason` 一个信号能把「校验通过的截断调用」和「真的完整的调用」区分开**，所以判据要落在 stop_reason 上，而且要**整批失败**——同一消息里的调用共享同一个截断点，单独判断其中一条是伪精细。
+
+**迁移要点：** 审计 M7 时按三档问：(1) 有没有「解析失败就换默认值」的分支（案例 1 的形态）？(2) 有没有抢救式解析器把残缺输入变成合法输入（pi 的形态，更难发现）？(3) 截断信号（`stop_reason: length` / `finish_reason: length`）参与决策了吗？第 (2) 档答「有」而第 (3) 档答「没有」，就是 M7 的最坏形态——防线全部通过，但拦不住任何东西。
+
+---
+
+## 模式 26 · 批终止是跨字段不变量，全批一致才终止
+
+**服务的不变式：** M11、L7
+
+**做法：** `packages/agent/src/agent-loop.ts`：
+
+```ts
+function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): boolean {
+	return finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.result.terminate === true);
+}
+```
+
+**为什么值得学：** 一个模型消息可以同时发出多个工具调用，其中一部分标了终止、一部分没有。三种处理方式的后果不同：**少数服从多数** → 少数派想终止却终止不了；**任一条终止就终止** → 想继续的调用被截断且结果未回收；**全批一致才终止** → 分歧时保守地继续，让模型自己调和。这里选的是第三种，而且用 `every()` 写成了不可歧义的表达式。配套的一处：未知工具名返回错误结果而不是抛异常（`createErrorToolResult(\`Tool ${toolCall.name} not found\`)`，`isError: true`）——**工具幻觉走 M5 的自愈档，不是崩溃档**。
+
+**迁移要点：** 凡是「一批动作里有多个布尔决策」的地方（终止、跳过、重试、回滚），都要问一句：分歧时按哪个来？答案必须写进代码而不是靠约定。`every()` / `some()` 选错一个，就是静默丢掉少数派的意图。
+
+---
+
+## 模式 27 · 可重试错误用双层正则，非重试的测在前
+
+**服务的不变式：** L8、M11
+
+**做法：** `packages/agent/src/harness/runtime/drive/retry.ts`——「classifier and the policy-driven retry loop live together and stay reusable」，分两层，**非重试的在前**：
+
+```ts
+const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
+	"GoUsageLimitError", "FreeUsageLimitError",
+	"Monthly usage limit reached", "available balance",
+	"insufficient_quota", "out of budget", "quota exceeded", "billing",
+]);
+// 然后再测 RETRYABLE：overloaded / rate.?limit / 429 / 500 / 502 / 503 / 504 / 524 /
+// service.?unavailable / connection.?refused / getaddrinfo / EAI_AGAIN / socket hang up /
+// timed? out / stream ended before message_stop / ResourceExhausted / ...
+
+export function isRetryableAssistantError(message: AssistantMessage): boolean {
+	if (message.stopReason !== "error" || !message.errorMessage) return false;
+	const errorMessage = message.errorMessage;
+	if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) return false;
+	return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
+}
+```
+
+**为什么值得学：** 案例 2 模式 19 给出的是白名单形态（枚举错误码），案例 1 的反例是 `retry_on=(Exception,)` 默认过宽。这里补的是**白名单仍然不够**的那种情况：`"quota exceeded"` 和 `"overloaded"` 都是 provider 报错，一个该重试一个不该——两者文本上无法用单个白名单区分。解法是**双层判定，且非重试优先短路**：如果先测可重试集合，`"quota exceeded"` 会因为匹配别的分支而被误重试，白烧一次请求才发现是配额问题。顺序错了，白名单就是装饰。
+
+另一处值得记的：**中断（abort）是终态，永不重试，也不当成功上报**。退避睡眠期间被中断会归一化成 provider 流中断的同一消息形状（`stopReason: "aborted"`，拆掉 `errorMessage`），这样调用方只有一种「被取消」的形状要处理。
+
+**迁移要点：** 审计 L8 时问第五问的下一层：**你的白名单里有没有互相重叠的模式，重叠时的优先级是显式的吗？** 文本匹配型分类（正则、字符串包含）天然有重叠，重叠时必须显式声明「哪个先测」。异常类型型分类不会有这个问题——这也是模式 15「分类可替换」的收益之一。
+
+---
+
+## 模式 28 · 指数退避要防溢出，且防的是两层上限
+
+**服务的不变式：** L8
+
+**做法：** `packages/ai/src/utils/retry.ts`——这是**第二个独立来源**，与案例 2 的 `Math.min(retry - 1, 1024)` 互证：
+
+```ts
+export function retryDelay(baseDelayMs: number, attempt: number): number {
+	const delay = baseDelayMs * 2 ** Math.max(0, attempt - 1);
+	return Number.isSafeInteger(delay) ? delay : Number.MAX_SAFE_INTEGER;
+}
+export function retryNotBefore(baseDelayMs: number, attempt: number, now = Date.now()): number {
+	const sum = now + retryDelay(baseDelayMs, attempt);
+	return Number.isSafeInteger(sum) ? sum : Number.MAX_SAFE_INTEGER;
+}
+```
+
+`waitUntil` 里还有一处：`setTimeout(check, Math.min(remaining, 2_147_483_647))`——**setTimeout 的 32 位上限**，和 JS 安全整数的上限是两件事。
+
+**为什么值得学：** 「`2 ** n` 溢出」听起来像理论问题，但两处上限的性质完全不同：`Number.MAX_SAFE_INTEGER` 挡住的是精度丢失（延迟变成一个看起来合理实则不可靠的大数），`2_147_483_647` 挡住的是 timer 语义错误（`setTimeout` 收到超过 32 位的值会被截断成一个小值，**退避变成即时重试**）。第二处尤其反直觉——不是「等太久」，是「等不到」。
+
+**迁移要点：** 审计指数退避时按两处问：(1) 延迟计算有没有溢出防护？(2) **把它交给谁计时？那个 API 有自己的上限吗？** `setTimeout` / `setInterval` 的 32 位上限、`time.Sleep` 的 int 单位，都在这一类里。
+
+---
+
+## 模式 29 · 检查点是操作状态转移，不含活对象；边界处显式记录「续跑什么」
+
+**服务的不变式：** L5、X2
+
+**做法：** `packages/agent/src/harness/runtime/drive/checkpoint.ts`——检查点值是纯数据类型的状态转移，写操作是一个 `commit` 事务（`writes` + `operationState` + `materialize`），而不是一个包含 client / stream 的快照对象：
+
+```ts
+const nextState: CheckpointOperation = {
+	...operationScopeOf(current),
+	at: "checkpoint",
+	continuation: { kind: "need_assistant", overflowRecoveryUsed: false },
+	triggerEntryId,
+};
+```
+
+压缩（compaction）发生在边界上，边界记录**精确的续跑点**：
+
+```ts
+kind: "resume_checkpoint",
+resumeAfter: { continuation: current.continuation, triggerEntryId: current.triggerEntryId },
+```
+
+**为什么值得学：** 案例 1 模式 11 讲的是 wiring-vs-data 的**类型分离**（让检查点自动变干净）。这里补的是另一半：**分离了类型还不够，恢复时要知道「从哪个动作的哪一步续」**。`continuation` 是个枚举 + 标志（`kind: "need_assistant"`、`overflowRecoveryUsed: false`），不是自由文本也不是一个函数。恢复语义由状态机的 `at` 字段决定，不靠重放历史去推断——推断出来的恢复点，恢复一次就变一次。
+
+**迁移要点：** 审计 L5 时问两步：(1) 检查点里有没有活对象（案例 1 的问法）？(2) **有没有一个「下一步是什么」的枚举状态？** 只有第 (1) 步答得上而第 (2) 步答不上，恢复会重新跑完整动作，副作用重放。
+
+---
+
+## 模式 30 · 被中断的生成不重新调用模型，用已提交的片段收尾
+
+**服务的不变式：** L6、L7、X2
+
+**做法：** `packages/agent/src/harness/runtime/drive/terminal.ts`——中断不触发第二次 provider 调用，而是把已经流出来的部分包成一个明确的错误消息：
+
+```ts
+function interruptedAssistantMessage(identity, partial): SettledAssistantMessage {
+	const warning =
+		"Assistant request was interrupted. The preceding content is the latest committed partial; newer live output may be missing and the external outcome is unknown.";
+	return partial === undefined ? { ... usage: ZERO_USAGE, stopReason: "error", errorMessage: warning }
+		: { ...partial, usage: ZERO_USAGE, stopReason: "error", errorMessage: warning };
+}
+```
+
+恢复出来的事件带 `recovery: true` 标记，与真实模型输出可区分。
+
+**为什么值得学：** 这是 L6「副作用幂等」和 M4「超限行为」的交集，也是全库少见的诚实写法。注释里明说了**外部结果未知**——请求已经发出去了，模型可能已经生成了后半段并触发了副作用，但客户端看不到。这种情况只有两种处理：**重调模型**（幂等破坏：可能重复副作用）或**收尾并声明不确定**（正确但不完美）。这里选了后者，而且把不确定性写进了返回的错误信息里，调用方不会误以为「这是模型的最终答案」。
+
+`recovery: true` 标记对应一个之前没有的判据：**合成的、恢复的输出必须在事件流里可区分**。没有这个标记，事件溯源看起来完整，但重放时无法分辨哪段是模型说的、哪段是框架补的——X2 的「能重建运行」在这一点上直接失效。
+
+**迁移要点：** 审计恢复逻辑时问：恢复产生的是「新的一次模型调用」还是「对已有输出的标注」？前者要幂等键保护，后者不需要但**必须在事件里打标**。两者都不做的，是 X2 与 L6 的复合缺陷。
+
+---
+
+## 模式 31 · 跨字段不变量在构造期抛出；清理只删当前状态标为 pending 的部分
+
+**服务的不变式：** X5、L5、M9
+
+**做法一：构造期跨字段不变量**（`packages/agent/src/harness/runtime/drive/recovery.ts`）——与案例 2 模式 23 互证，是第二个独立来源：
+
+```ts
+if ((status === "failed") !== (error !== undefined)) {
+	throw new SessionInvariantError("Only a failed operation result may carry an error");
+}
+```
+
+`failed` 却无 error、或成功却带 error，都在构造时炸，不留到运行期。
+
+**做法二：状态依赖的清理**（同文件）——不是「无条件清理所有 scratch」，而是先查当前状态标记了什么 pending，再按前缀扫出属于本操作的 scratch，只删那部分：
+
+```ts
+let frameDelete: Write | undefined;
+if (state.at === "assistant.effect_pending" || state.at === "deferred.effect_pending") {
+	frameDelete = deleteList(pendingAssistantFrames(operationId, state.responseEntryId));
+}
+```
+
+**做法三：并发写入的序列化键用规范路径**（`packages/agent/src/harness/tools/file-mutation-queue.py` 对应的 `file-mutation-queue.ts`）——不是模型给的字符串路径，而是 symlink 解析后的规范路径：
+
+```ts
+const absolutePath = getOrThrow(await env.absolutePath(path, context));
+const canonicalPath = await env.canonicalPath(absolutePath, context);
+if (canonicalPath.ok) return canonicalPath.value;
+if (canonicalPath.error.code === "not_found" || canonicalPath.error.code === "not_supported") return absolutePath;
+```
+
+队列状态装在 `WeakMap<ExecutionEnv, MutationQueueState>` 上（生命周期有界），清理只删队尾且先比对同一对象（`if (state.queues.get(key) === chainedQueue) state.queues.delete(key)`）。
+
+**为什么值得学：** 三条合起来是「不变量写在哪一层」的完整谱系：**构造期**（数据形状矛盾立即炸）→ **运行期按状态裁剪**（清理范围由当前状态决定，无条件清理会删掉在途数据）→ **序列化键规范化**（`a/b.ts` 与 `./a/b.ts` 指向同一文件但字符串不同，用字符串做键会让两个写者各自拿锁）。第三条是 M9 的一个具体形态：并发控制失效不总是「两个节点写同一个 key」，也可以是**「两个字符串不同的写者其实写同一个文件」**。
+
+**迁移要点：** 审计 X5 时把构造期不变量按三处问：数据形状之间（案例 2 模式 23）、状态与字段之间（这里）、路径/标识规范化之间（这里）。审计并发控制时问：锁的键是**规范化的标识**还是**调用方给的字符串**？后者在 symlink、相对路径、大小写差异下都会漏。
+
+---
+
+## 案例 4 · OpenHarness（2026-09-08 上游 `main` 源码核验）
+
+来源：[github.com/HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness)。loop 在 `src/openharness/engine/query.py`，外层编排器在 `src/openharness/autopilot/service.py`。
+
+## 模式 32 · 无上限的退出路径有它自己的终态错误
+
+**服务的不变式：** L1、M4
+
+**做法：** `src/openharness/engine/query.py`——循环条件允许无限循环，但两条退出路径给出**不同的错误**：
+
+```py
+if context.max_turns is not None:
+    raise MaxTurnsExceeded(context.max_turns)
+raise RuntimeError("Query loop exited without a max_turns limit or final response")
+```
+
+配套的三处「不许静默」：
+
+```py
+if final_message is None:
+    raise RuntimeError("Model stream finished without a final message")
+
+if final_message.role == "assistant" and final_message.is_effectively_empty():
+    yield ErrorEvent(message=(
+        "Model returned an empty assistant message. "
+        "The turn was ignored to keep the session healthy.")), usage
+    return
+```
+
+**为什么值得学：** 这是 L1 的「三条终态」里此前缺的那一条。案例 1 模式 4 的三条是「正常完成 / 达上限熔断 / 无人 ready 判为卡住」——**都没覆盖「根本没设上限」**。一个 `while` 循环在理论上永远可能不退出，所以「未达上限就退出」本身是异常事件，必须有它自己的名字：是达上限了（配置问题，降轮数），还是压根没配上限（配置缺失，M1 的 GAP）？混在一个 `RuntimeError` 里，报告的修复建议就没法定位。
+
+空 assistant 消息的处理是同一个立场的另一个应用：**不把它 append 进历史然后继续跑**（那会让下一轮看到一个无内容的 assistant 消息，多数 provider 直接报错），而是响亮地终止整个会话并说明原因。
+
+**迁移要点：** 审计 L1 时问第四问：**如果这个循环根本没有上限，退出时能被观测到吗？** 答「不能」的不是 L1 的缺口，是 L1 和 M1 的复合——因为没有上限，所以「退出」这件事不会自动成为异常。
+
+---
+
+## 模式 33 · 框架自己引起的重试不占用调用方的预算
+
+**服务的不变式：** M1、M2、L8
+
+**做法：** `src/openharness/engine/query.py`——模型拒绝本地上限、框架改用 provider 上限重试时，把轮数退回去：
+
+```py
+if _is_completion_token_limit_error(exc):
+    supported_limit = _extract_completion_token_limit(exc)
+    if supported_limit is not None and effective_max_tokens > supported_limit:
+        previous_max_tokens = effective_max_tokens
+        effective_max_tokens = supported_limit
+        yield StatusEvent(message=(
+            f"Model rejected max_tokens={previous_max_tokens}; "
+            f"retrying with provider limit {effective_max_tokens}.")), None
+        turn_count = max(0, turn_count - 1)
+        continue
+```
+
+`max(0, ...)` 保证不会退成负数。
+
+**为什么值得学：** 一个此前没被单独写出的判据。预算的语义取决于**谁让它多跑了一轮**：模型说「继续」多跑一轮，是模型的选择，该算；框架因为自己配错了 `max_tokens` 多跑一轮，是框架的错，不该算到调用方头上。不区分这两者，调用方会看到「预算用完了」而实际原因是一开始的上限配置就错了——报告的修复建议会指向错误的地方（降轮数，而不是修正限）。
+
+**迁移要点：** 审计 M1/M2 时问：**这个计数器在自纠类重试里被扣减、回退，还是不动？** 三种答案的语义不同，必须显式。回退要带上界（`max(0, ...)`），否则自纠可以无限续命。
+
+---
+
+## 模式 34 · 钳制必须可观测，且枚举值与数字值分开钳
+
+**服务的不变式：** X5、M6
+
+**做法一：非对称钳制**（`src/openharness/engine/query_engine.py`）——`None` 是合法语义，数字有下限：
+
+```py
+def __init__(self, ..., max_turns: int | None = 8) -> None:
+def set_max_turns(self, max_turns: int | None) -> None:
+    self._max_turns = None if max_turns is None else max(1, int(max_turns))
+```
+
+`max(1, ...)` 挡住 `max_turns=0` 把循环静默变成「永不进入」，而 `None`（无上限）仍然是一个可表达的合法状态。两者语义相反，必须分开处理。
+
+**做法二：钳制必须被报告**（`_safe_completion_token_cap`）——钳到 `MAX_SAFE_COMPLETION_TOKENS` 后发一条 `StatusEvent`，把请求值和实际值都写出来。
+
+**做法三：工具结果按提交顺序发出**（`query.py`），理由是代码注释里写清楚的：
+
+```py
+# Use return_exceptions=True so a single failing tool does not abandon
+# its siblings as cancelled coroutines and leave the conversation with
+# un-replied tool_use blocks (Anthropic's API rejects the next request
+# on the session if any tool_use is missing a matching tool_result).
+```
+
+这是「孤儿工具结果」这条判据的**第二个独立来源**（案例 1 模式 9 是裁剪侧，这里是并发执行侧）。
+
+**为什么值得学：** X5 的判据此前只覆盖「配置错了会不会抛」。这里补两条：**钳制之后要可观测**（静默钳制等于调用方以为配了 8192、实际跑 4096，成本核算和超时预测全错），以及**枚举型 `None` 与数字型边界要分开**（`max(1, None)` 在 Python 里会抛 `TypeError`，在 TypeScript 里会 `NaN` 传播——同一条「数字要有下限」的规则套在可空类型上就是 bug）。
+
+**迁移要点：** 审计 X5 时加一问：**配置被钳制或回落到默认值时，调用方能知道吗？** 静默钳制与静默漂移是同一类问题的两种方向，都要判 `RISK`。
+
+---
+
+## 模式 35 · 反例入册（案例 4 的三个，其中一个其实是正例）
+
+**服务的不变式：** M1、X1、X5、L2
+
+### 反例 A · 两层默认值不一致，审计看不出来
+
+**证据：** `QueryEngine.__init__` 的默认是 `max_turns: int | None = 8`；但 `src/openharness/engine/query.py` 的 `QueryContext` 默认是 `max_turns: int | None = 200`。走 `QueryEngine` 的调用方拿到 8 轮，直接构造 `QueryContext` 的调用方拿到 200 轮。
+
+**可迁移的判据：** 这是 SKILL.md L2 里那条「那条路径根本没接到配置」的现场。同一个上限参数，两条构造路径给出 25 倍不同的默认值，而且**配置审计查不出来**——配置是对的，只是有另一条路没走它。审计 L2 时不要只问「上限有没有下传」，要问**「每一条构造路径的默认值是不是一致的」**。
+
+### 反例 B · 累加型聚合器没有执行点
+
+**证据：** `src/openharness/engine/cost_tracker.py` 全文 25 行：
+
+```py
+class CostTracker:
+    def __init__(self) -> None:
+        self._usage = UsageSnapshot()
+    def add(self, usage: UsageSnapshot) -> None:
+        self._usage = UsageSnapshot(
+            input_tokens=self._usage.input_tokens + usage.input_tokens,
+            output_tokens=self._usage.output_tokens + usage.output_tokens,
+        )
+```
+
+只累加 input/output，**丢弃 cacheRead / cacheWrite / cost**，且**没有任何地方读它来做限用**。
+
+**可迁移的判据：** 这是 M1 第三档的现场：「计数器存在却没人把它当限用」。两个独立缺陷叠在一起——(1) 累加器本身字段不全，回答不了「花了多少钱」（X1 的判据：聚合器丢字段，回答不了该回答的问题）；(2) 即使字段全，也没有执行点。**字段全 + 无执行点 = M1 的 GAP；字段不全 + 无执行点 = M1 的 GAP 外加 X1 的 GAP。** 审计时两条要分开报，因为修法不同（补字段 vs 接执行点）。
+
+### 反例 C（其实是正例）· 硬拒层在用户规则之前求值，不可被配置覆盖
+
+**证据：** `src/openharness/permissions/checker.py`——敏感路径名单（`.ssh/*`、`.aws/credentials`、`.docker/config.json`、`.kube/config` 等）在 `evaluate()` 的**最前面**求值，早于工具黑名单、白名单、路径规则、命令模式、权限模式：
+
+```py
+# Built-in sensitive path protection — always active, cannot be
+# overridden by user settings or permission mode.
+```
+
+而且 `FULL_AUTO`（全放行）也**不覆盖这一层**——全放行分支在敏感路径检查之后。配套的一个细节：`_policy_match_paths` 同时匹配 `path` 和 `path + "/"`，让 `*/.ssh/*` 这类模式能命中目录根本身。
+
+**为什么值得学：** 这与案例 2 反例 A（建议性护栏被当硬边界）正好相对。那里的问题是「唯一的边界是建议性的」，这里给出的是正向形态：**存在一条不可被配置覆盖的硬拒层，且它的求值顺序排在所有可配置项之前**。求值顺序是这里的实质——`FULL_AUTO` 分支放在敏感路径检查之前，这条硬拒层就形同虚设。判 M13 时问第四问：**有没有一层是配置改不动的？它的求值顺序在可配置项之前还是之后？**
+
+**注意：** `_policy_match_paths` 那处斜杠兼容是**运行时检查型**的防线（案例 3 的 §0 判据），不是结构性的。判 M13 时按 §0 追加一问「覆盖了几条分支」——它只处理了目录根这一个歧义，没有处理大小写、Unicode 规范化、路径穿越（`..`）这些。
+
+---
+
+## 案例 5 · harness/harness（2026-09-08 上游 `main` 源码核验）
+
+来源：[github.com/harness/harness](https://github.com/harness/harness)。Go 写的 CI/CD 与 artifact 平台，**没有 LLM，没有 agent loop**。它进这个库的原因只有一个：**它证明了这组不变式是调度类系统的通用属性，不是 LLM 特有的**。它的 scheduler、queue、canceler 在 M3、L1、L3、L6、L7、X5 上都有可对照的具体判据。
+
+## 模式 36 · 可丢的唤醒信号需要有限轮询兜底
+
+**服务的不变式：** L1、L7
+
+**做法：** `app/pipeline/scheduler/queue.go`——唤醒用容量为 1 的 channel，发送是非阻塞的，**信号可以被丢弃**：
+
+```go
+q := &queue{
+	ready:    make(chan struct{}, 1),
+	interval: time.Minute,
+}
+
+func (q *queue) Schedule(_ context.Context, _ *types.Stage) error {
+	select {
+	case q.ready <- struct{}{}:
+	default:  // 满就丢
+	}
+	return nil
+}
+
+func (q *queue) start() error {
+	for {
+		select {
+		case <-q.ctx.Done():
+			return q.ctx.Err()
+		case <-q.ready:
+			if err := q.signal(q.ctx); err != nil {
+				// don't return, only log error
+			}
+		case <-time.After(q.interval):   // 1 分钟轮询兜底
+			if err := q.signal(q.ctx); err != nil {
+				log.Ctx(q.ctx).Err(err).Msg("failed to signal on interval")
+			}
+		}
+	}
+}
+```
+
+**为什么值得学：** 一条此前没被写出的判据。**基于信号的唤醒如果允许丢弃，就必须有有界轮询兜底，否则丢信号就是活性 bug**——不是正确性 bug，是「这个 stage 永远不会被调度，而没有任何错误」，比报错更难查。这里容量 1 + 非阻塞发送的设计是**正确**的：它允许合并多次唤醒成一次（省掉无谓的 `signal` 调用），正确性由 1 分钟轮询兜住。`signal` 的返回错误也被吞掉并只记日志——**循环不因瞬时故障而死**，这也是活性设计。
+
+**迁移要点：** 审计任何 `select` / `channel` / event-driven 唤醒时问两句：(1) 唤醒能不能丢？(2) 如果能丢，兜底轮询的上限是多少？**答「不能丢」但发送是非阻塞的，就是 L1 的 GAP**——声明与实现不一致。
+
+---
+
+## 模式 37 · 终态编码「这个单元有没有真的启动过」
+
+**服务的不变式：** L1、L7
+
+**做法：** `app/pipeline/canceler/canceler.go` 与 `app/pipeline/manager/teardown.go`——取消与收尾都用 `Started != 0` 区分「已被杀掉」和「被跳过」：
+
+```go
+if stage.Started != 0 {
+	stage.Status = enum.CIStatusKilled
+} else {
+	stage.Status = enum.CIStatusSkipped
+	stage.Started = now
+}
+```
+
+被杀的步骤还写死退出码 130（`step.ExitCode = 130`）。取消本身是幂等的，入口先做状态守卫：
+
+```go
+// do not cancel the build if the build status is complete.
+if execution.Status != enum.CIStatusPending &&
+	execution.Status != enum.CIStatusRunning {
+	return nil
+}
+```
+
+终态聚合（`teardown.go`）不是简单取最后一个状态，而是按优先级折叠：默认 `Success`，遇到 `Killed` 则 killed，遇到 `Failure` 则 failure，遇到 `Error` 则 error。
+
+**为什么值得学：** 案例 1 模式 4 的三条终态讲的是**循环**的终态；这里讲的是**单元**的终态，且补了一个之前没有的判据：**终态要能回答「它到底跑过没有」**。`Skipped` 和 `Killed` 在「不是成功」这一点上等价，但在「有没有消耗资源」「要不要计入失败率」「下游该不该跑」上完全不同。`ExitCode = 130` 是把这个区分编码进下游契约的方式。
+
+取消的幂等性判据也值得记：**幂等不等于无操作**。这里取消一个已完成的 execution 会返回 `nil`（成功）而不是错误——重复取消是合法的调用，不该被报成失败。
+
+**迁移要点：** 审计 L1 时问：终态枚举能不能回答「这个单元消耗了资源吗」？答不上时，把所有「非成功」状态折叠成一个值，就是缺陷形态。
+
+---
+
+## 模式 38 · 并发与限流守卫不追溯已在跑的工作
+
+**服务的不变式：** L3、X5
+
+**做法：** `app/pipeline/scheduler/queue.go`——两个守卫函数都有显式的排除集合：
+
+```go
+func withinLimits(stage *types.Stage, siblings []*types.Stage) bool {
+	if stage.Limit == 0 { return true }          // 默认值恰好是无上限
+	for _, sibling := range siblings {
+		if sibling.RepoID != stage.RepoID { continue }   // 排除：不同仓库
+		if sibling.ID == stage.ID { continue }           // 排除：自己
+		if sibling.Name != stage.Name { continue }       // 排除：不同 stage
+		...
+	}
+}
+
+func shouldThrottle(stage *types.Stage, siblings []*types.Stage, limit int) bool {
+	if limit == 0 { return false }
+	// if the repository is running it is too late
+	// to skip and we can exit
+	if stage.Status == enum.CIStatusRunning { return false }
+}
+```
+
+`matchResource` 则在比较点统一补默认值：`kinda == ""` → `"pipeline"`，`typea == ""` → `"docker"`，四个参数用同一套默认，避免某个比较器漏补一个默认值。
+
+**为什么值得学：** 三条判据合在一起：**守卫要排除自身**（否则自己把自己算进计数，第一个 stage 就会把自己锁在外面）、**限流不追溯**（已经在跑的不因为超配而被打断——「已经晚了」是显式设计）、**比较器共享默认值**（X5 判据：所有比较器用同一套归一化，缺失值才无法以歧义形式逃出）。
+
+第三条尤其值得对照：**`Limit == 0` 表示无上限**——默认值恰好是危险值。这是案例 2 反例 B「省略即重置」的第二个独立来源，且这次是数值型而不是配置省略。
+
+**迁移要点：** 审计 L3 时问：**守卫的计数会不会包含被守卫对象自己？** 这是并发计数类缺陷最常见的一个，且只在一个元素时不触发（第一个元素把自己算进去也才 1 ≤ limit），在第二个元素时才开始表现，测试很难覆盖。
+
+---
+
+## 模式 39 · 收尾不能绑定触发它的取消令牌，清理失败要按层分级
+
+**服务的不变式：** L5、L6、L7
+
+**做法一：用 `noContext`，不用触发收尾的那个 ctx**（`app/pipeline/manager/teardown.go` 全文）——`do()` 接收 `ctx`，但所有 store 读写都用 `noContext`；只有下游取消、下游调度、事件上报三处用传入的 `ctx`：
+
+```go
+stages, err := t.Stages.ListWithSteps(noContext, execution.ID)
+err = t.cancelDownstream(ctx, stages)
+err = t.scheduleDownstream(ctx, stages)
+```
+
+**做法二：乐观锁冲突时 resync，且 resync 故意不更新 Version 字段**：
+
+```go
+// resync updates the stage from the database. Note that it does
+// not update the Version field. This is by design. It prevents
+// the current go routine from updating a stage that has been
+// updated by another go routine.
+```
+
+**做法三：清理错误按层分级**——step / stage 写入失败一律硬返回；log stream 删除失败降级为 warn；但 `checks.Write`（GitHub status check）失败**只记日志并继续**，注释写明「try to write to the checks store - if not, log an error and continue」。
+
+**为什么值得学：** 做法一是 L5 的**新判据**：**收尾/清理路径不能继承触发它的那个取消令牌**。一个被取消的 execution 触发自己的 teardown，teardown 用同一个 ctx，取消传播会让 teardown 中途退出——留下「父已标记 killed、子仍标记 running」的中间状态。用 `noContext`（或等价的 uncancelable context）让收尾有独立的生命周期。
+
+做法二是模式 29 的对照：案例 3 用状态机字段表达「下一步是什么」，这里用**故意不更新版本号**表达「我不再参与这个对象的并发竞争」。同样是「让错误状态不可表达」，但手段是**放弃可变性**而不是拆分类型。
+
+做法三是**有意的**分级，且写进了注释。对照反例：`canceler.go` 里 execution 级更新失败是硬错误（`return fmt.Errorf(...)`），而 stage / step 级更新失败是 `log.Debug()` 并吞掉——**父可以持久化为 killed，子仍显示 running**，产生不一致的状态树。这是 pi 的模式 31（清理只删当前状态标 pending 的部分、错误不吞）的镜像反例。
+
+**迁移要点：** 审计 L5/L6 时问：**收尾路径的 context 来自哪里？** 来自触发它的取消/超时操作时，就是 L5 的 GAP——收尾本身成了可被取消的对象。审计错误分级时问：**哪些清理是「必须成功否则状态不一致」的？** 这类不能吞；「删临时日志」这类可以吞但要留痕。分级必须有注释说明理由，否则下一个维护者会统一掉。
+
+---
+
+## 模式 40 · 反例入册（案例 5 的一个）
+
+**服务的不变式：** L6、L7
+
+**证据：** `app/pipeline/canceler/canceler.go`——同一个函数里的失败分级不对称：
+
+```go
+err := s.executionStore.Update(ctx, execution)
+if err != nil {
+	return fmt.Errorf("could not update execution status to canceled: %w", err)   // 硬错误
+}
+...
+err := s.stageStore.Update(ctx, stage)
+if err != nil {
+	log.Debug().Err(err).Msg("canceler: cannot update stage status")              // 吞掉
+}
+...
+err := s.stepStore.Update(ctx, step)
+if err != nil {
+	log.Debug().Err(err).Msg("canceler: cannot update step status")               // 吞掉
+}
+```
+
+**可迁移的判据：** 这是「部分失败产生不一致状态树」的现场形态，且**是分级错误的方向**：父级失败是硬错误、子级失败是 Debug 级吞掉。结果是一个持久的、可观测的不一致——UI 显示整个 build 被 killed，但某个 stage 仍显示 running。对照 harness/harness 自己 `teardown.go` 的做法（`cancelDownstream` / `scheduleDownstream` 用 `multierror.Append` 收集所有错误再返回），同一仓库里两种写法并存。
+
+更值得记的是**这条不是笔误**：canceler 的语义是「取消是尽力而为，父先落盘」。这个选择在崩溃恢复场景下有道理（先保证父状态可查）。但正确的写法是把「尽力而为」和「静默不一致」分开——**尽力而为可以吞错误，但必须把「有子单元没同步」这件事变成可观测的状态**，而不是靠 `log.Debug()`。判 L6 时这就是 RISK 的判据：部分失败的后果没有被编码进数据，只被编码进了日志。
+
+**迁移要点：** 审计「父-子状态树」时问：**子级更新失败会怎样？** 答「记日志」的，要再问一句「有谁能观测到这个不一致」——如果没有，就是反例形态。
+
+---
+
 ## 挂载索引：不变式 → 模式
 
-| 不变式 | 案例 1（模式 1–17） | 案例 2（模式 18–24） |
-|---|---|---|
-| **M1** | — | 模式 18（自文档化外包）、模式 20 |
-| **M2** | 模式 4（检查点位置：每波次都在循环内检查） | 模式 22（边界由扩展点定义，不可发现性消除） |
-| **M3** | 模式 8（换算比不是常数，`SubPlanBody` 把一整个子 Run 塞进一个节点） | — |
-| **M4** | 模式 13、模式 14 | — |
-| **M5** | 模式 17 | — |
-| **M6** | — | — |
-| **M7** | 模式 13（正例与反例同一文件） | — |
-| **M8** | 模式 3 | — |
-| **M9** | 模式 1、模式 2、模式 9、模式 10 | 模式 23（跨字段不变量） |
-| **M10** | 模式 13 | — |
-| **M11** | 模式 15 | — |
-| **M12** | — | — |
-| **M13** | 模式 6、模式 17 | 模式 24 反例 A（建议性 vs 强制层） |
-| **M14** | — | — |
-| **L1** | 模式 4、模式 5、模式 7 | 模式 22 |
-| **L2** | — | 模式 18（谁负责补预算） |
-| **L3** | 模式 8（深度有正向实践，广度明确标为缺口） | — |
-| **L4** | 模式 7 | — |
-| **L5** | 模式 11、模式 12 | 模式 20、模式 21 |
-| **L6** | 模式 16（以反例入册） | — |
-| **L7** | 模式 3、模式 4、模式 13、模式 14 | 模式 19 |
-| **L8** | 模式 15（策略机制正向，默认值反例） | 模式 19（五项要素齐全，含对称 jitter） |
-| **L9** | — | — |
-| **L10** | 模式 3 | 模式 24 反例 C（无上限重试） |
-| **X1** | 模式 10（`last_level` 暴露压缩级别） | 模式 19、模式 20 |
-| **X2** | 模式 1（波次 delta 事件溯源）、模式 13 | 模式 20、模式 21 |
-| **X3** | 模式 6 | — |
-| **X4** | — | — |
-| **X5** | 模式 5 | 模式 21、模式 23、模式 24 反例 B |
+| 不变式 | 案例 1（模式 1–17） | 案例 2（模式 18–24） | 案例 3 · pi（25–31） | 案例 4 · OpenHarness（32–35） | 案例 5 · harness（36–40） |
+|---|---|---|---|---|---|
+| **M1** | — | 模式 18（自文档化外包）、模式 20 | — | 模式 33（自纠重试不占预算）、模式 35 反例 B | — |
+| **M2** | 模式 4（检查点位置：每波次都在循环内检查） | 模式 22（边界由扩展点定义，不可发现性消除） | — | 模式 33 | — |
+| **M3** | 模式 8（换算比不是常数，`SubPlanBody` 把一整个子 Run 塞进一个节点） | — | — | — | 模式 38（守卫的排除集合） |
+| **M4** | 模式 13、模式 14 | — | 模式 25（截断整批失败） | 模式 32（无上限退出有独立终态） | — |
+| **M5** | 模式 17 | — | 模式 26（未知工具走错误结果，不抛） | — | — |
+| **M6** | — | — | 模式 31（构造期跨字段不变量） | 模式 34（枚举与数字分开钳） | 模式 38（比较器共享默认值） |
+| **M7** | 模式 13（正例与反例同一文件） | — | 模式 25（抢救解析器让截断参数通过校验） | — | — |
+| **M8** | 模式 3 | — | 模式 26 | — | — |
+| **M9** | 模式 1、模式 2、模式 9、模式 10 | 模式 23（跨字段不变量） | 模式 31（规范路径做队列键） | 模式 34（工具结果按提交顺序发出） | — |
+| **M10** | 模式 13 | — | 模式 25 | 模式 32 | — |
+| **M11** | 模式 15 | — | 模式 26、模式 27 | — | — |
+| **M12** | — | — | — | — | — |
+| **M13** | 模式 6、模式 17 | 模式 24 反例 A（建议性 vs 强制层） | — | 模式 35 反例 C（不可覆盖的硬拒层） | — |
+| **M14** | — | — | — | — | — |
+| **L1** | 模式 4、模式 5、模式 7 | 模式 22 | — | 模式 32（三条终态缺的那一条） | 模式 36（信号兜底）、模式 37（终态编码是否启动） |
+| **L2** | — | 模式 18（谁负责补预算） | — | 模式 35 反例 A（两层默认值不一致） | — |
+| **L3** | 模式 8（深度有正向实践，广度明确标为缺口） | — | — | — | 模式 38（守卫排除自身） |
+| **L4** | 模式 7 | — | — | — | — |
+| **L5** | 模式 11、模式 12 | 模式 20、模式 21 | 模式 29（检查点是状态转移）、模式 31（状态依赖清理） | — | 模式 39（noContext 收尾） |
+| **L6** | 模式 16（以反例入册） | — | 模式 30（中断不重调模型） | — | 模式 39、模式 40（部分失败的状态树） |
+| **L7** | 模式 3、模式 4、模式 13、模式 14 | 模式 19 | 模式 26、模式 27 | — | 模式 36、模式 37、模式 39 |
+| **L8** | 模式 15（策略机制正向，默认值反例） | 模式 19（五项要素齐全，含对称 jitter） | 模式 27（双层正则，非重试优先）、模式 28（两层溢出上限） | — | — |
+| **L9** | — | — | — | — | — |
+| **L10** | 模式 3 | 模式 24 反例 C（无上限重试） | — | — | — |
+| **X1** | 模式 10（`last_level` 暴露压缩级别） | 模式 19、模式 20 | 模式 27（重试是事件流） | 模式 34（钳制要可观测）、模式 35 反例 B（聚合器丢字段） | — |
+| **X2** | 模式 1（波次 delta 事件溯源）、模式 13 | 模式 20、模式 21 | 模式 30（`recovery: true` 标记）、模式 29 | — | — |
+| **X3** | 模式 6 | — | — | — | — |
+| **X4** | — | — | — | — | — |
+| **X5** | 模式 5 | 模式 21、模式 23、模式 24 反例 B | 模式 31（构造期跨字段不变量） | 模式 34（非对称钳制） | 模式 38（默认值恰是无上限） |
 
-两个案例合计补上了案例 1 的四个空行：**M1、L2、L8**（三个都有正向实践）、**L5**（案例 1 已有，案例 2 补了事件侧）。**仍然空的 4 行：M6、M12、L9、X4**——两个案例在这四项上都无可引做法。
+这次扩充的收获**不是补空行**——此前 5 个空行里只补上了 **M6** 一个（模式 31 的构造期跨字段不变量、模式 34 的枚举与数字分开钳、模式 38 的比较器共享默认值），**M12、M14、L9、X4 仍然空**，L10 仍然只有半个锚点。**真正的新增是判据本身变硬了**：已有锚点的项拿到了更强、更具体的写法（L8 从「五项要素齐全」变成「双层正则 + 非重试优先 + 两层溢出上限」，L1 从「三条终态」变成「三条终态 + 无上限退出独立终态 + 可丢信号需轮询兜底」），以及下面这 10 条此前没有对应条目的新判据。**空行没被填满这件事本身就是最强的结论**：M12（输出契约）、M14（不确定性与可复现）、L9（跨 agent 一致性）、X4（环境分层配置）这四项在五个不同语言、不同领域（其中一个是非 LLM 的）的代码库里都找不到可引写法——缺失是系统性的，不是这几个项目偷懒。
 
-- **已记录的缺口**（有缺陷结论，只是没有好写法可引）：M6 无参数类型校验、M12 无输出契约、L9 无冲突检测、M14 从不落盘温度与模型名、X4 无配置分层。
-- **案例 1 已补上的空行**：M1 与 L2 现在有案例 2 的锚点，但都是「显式外包」形态——引它们时要说明这是设计选择，不是缺陷已修。
+- **已记录的缺口**（有缺陷结论，只是没有好写法可引）：M12 无输出契约、L9 无跨 agent 一致性检查、X4 无配置分层、M14 从不落盘温度与模型名、L10 的「挂起等人工」在四个案例间反复缺失。M6 与 L3 此前也空着，M6 已有锚点（见上表），L3 自案例 1 模式 8 起有锚点（深度有正向实践、广度明确标为缺口）。
+- **新增的判据**（此前没有对应条目的）：M7 的「抢救解析器让截断参数通过校验」三档判定（模式 25）、L8 的「白名单内模式重叠时的优先级」与「计时 API 自身的上限」两问（模式 27、28）、M1/M2 的「自纠重试不占调用方预算」（模式 33）、X5 的「钳制要可观测」（模式 34）、M13 的「不可覆盖层与求值顺序」（模式 35 反例 C）、L1 的「可丢的唤醒信号需有限轮询兜底」（模式 36）、L3 的「守卫排除自身」（模式 38）、L5 的「收尾不继承触发它的取消令牌」（模式 39）、L6 的「部分失败必须编码进数据而非只进日志」（模式 40）。
 
 **不要把空行理解成「还没整理」——空行本身就是结论。尤其不要为了让挂载索引看起来完整而发明做法**：不变式表里已经写了它们缺什么会怎样，缺一个正向锚点不会让审计更弱，编造一个会。
 
 （注：L10 有锚点但只有半个——模式 3 的 fail-fast 命名只解决了「死得响不响」，没解决「挂起等人工」和「验收器」两半；模式 24 反例 C 记录的是同一缺口的另一种形态。半锚点也是锚点，按原项判。）
+
+（注：案例 3 与案例 4 的 `stopReason: "length"` / `finish_reason` 判据互相印证，模式 25 与模式 32 应一起引——一个讲「截断时做什么」，一个讲「截断后如何结束」。）
 
 ---
 
@@ -614,4 +1140,6 @@ if (policy.mode === 'always') {
 2. 判 `OK` 时查 §0，确认判的是「结构性不可表达」还是「运行时检查」。
 3. 判 `PENDING` 时不要引本文件——正向锚点不能替代核验。
 
-本文件的锚点绑定 2026-09-07 案例快照。**引锚点前先确认目标项目是否同一版本**；引「做法」不需要确认，引「行号」需要。
+本文件的锚点绑定 **2026-09-07**（案例 1–2）与 **2026-09-08**（案例 3–5）两份案例快照。**引锚点前先确认目标项目是否同一版本**；引「做法」不需要确认，引「行号」需要。
+
+案例 2–5 都是活跃迭代的上游主分支（`master` / `main`），行号漂移快于案例 1。另外两类锚点要注意方向：案例 5 的锚点来自**非 LLM 项目**，引它时是在引「调度类系统的通用不变式」，不是引「agent 框架的做法」；案例 4 的多个锚点是**反例**（模式 35），引的时候要连同「可迁移的判据」一起引，不要只引缺陷本身。

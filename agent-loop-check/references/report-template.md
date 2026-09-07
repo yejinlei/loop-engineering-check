@@ -82,7 +82,7 @@
 ```json
 {
   "skill": "loop-engineering-check",
-  "skill_version": "1.4.0",
+  "skill_version": "1.5.0",
   "generated_at": "2026-09-07T06:10:00Z",
   "target": "path/to/project",
   "framework": {
@@ -129,7 +129,7 @@
 |---|---|---|
 | `verdict` | `OK` / `GAP` / `RISK` / `N/A` / `PENDING` | `GAP` = 缺失；`RISK` = 存在但有框架特有风险；`PENDING` = 无法核验 |
 | `severity` | `blocker` / `major` / `minor` | 只有 `blocker` 计入 `summary.blockers` |
-| `evidence.confidence` | `introspected` / `source` / `version_knowledge` / `pending` | 与报告里的证据等级标记一一对应 |
+| `evidence.confidence` | `introspected` / `source` / `official_doc` / `version_knowledge` / `pending` | 与报告里的证据等级五档一一对应：`[自省实测]` / `[源码确认]` / `[官方文档确认]` / `[版本知识]` / `[待确认]` |
 | `confidence`（顶层） | `introspected` / `declared_only` / `grep_only` | 整个审计的证据等级，自省失败时降一级 |
 
 **CI 用法**：
