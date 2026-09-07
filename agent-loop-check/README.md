@@ -85,8 +85,10 @@ git clone https://github.com/yejinlei/loop-engineering-check ~/.claude/skills/lo
 - `loop-audit.json` — 给 CI 读。`summary.blockers` 可直接卡 CI：
 
 ```bash
-python -c "import json,sys; sys.exit(1 if json.load(open('loop-audit.json'))['summary']['blockers']>0 else 0)"
+python -c "import json,sys; sys.exit(1 if json.load(open('loop-audit.json',encoding='utf-8'))['summary']['blockers']>0 else 0)"
 ```
+
+`encoding='utf-8'` 不是装饰：`open()` 不带 encoding 用平台默认编码，在 GBK/cp1252 环境下这段命令会对**任何**审计结果抛 `UnicodeDecodeError` 并以 `exit=1` 退出——一次通过的审计也会被它判成 BLOCK，且报错里看不出原因。
 
 判定规则：`blockers > 0` → `BLOCK`；`blockers == 0 && gaps > 0` → `PASS WITH WARNINGS`；否则 `PASS`。
 
@@ -94,15 +96,46 @@ python -c "import json,sys; sys.exit(1 if json.load(open('loop-audit.json'))['su
 
 ```
 loop-engineering-check/
-├── SKILL.md                     # 技能主体（171 行，M/L/X 三层检查项全表）
+├── SKILL.md                     # 技能主体（185 行，M/L/X 三层检查项全表 + 正向判据）
 ├── README.md                    # 本文件
 ├── LICENSE
 ├── references/
-│   ├── framework-map.md         # 9 个框架 + 自研 loop 的差异矩阵（563 行，带目录）
+│   ├── framework-map.md         # 9 个框架 + 自研 loop 的差异矩阵（587 行，带目录）
+│   ├── loop-engineering-patterns.md  # 正向实践库：2 个案例、24 条做法（617 行）
 │   └── report-template.md       # 报告与 JSON 结构模板
 └── scripts/
     └── static-hints.py          # 只读静态提示扫描器（标准库）
 ```
+
+## 实践来源
+
+这个技能的判据不是凭空写的，全部来自逐行核验过的真实代码。分三类。
+
+### 两个案例工程（正向实践库，见 `references/loop-engineering-patterns.md`）
+
+| 案例 | 来源 | 核验内容 |
+|---|---|---|
+| 案例 1 · 自研 BSP 波次编排引擎 | 匿名（本地教学代码库，按用户要求脱敏） | 2026-09-07 逐行读源码，模式 1–17（含 6 条缺陷反例） |
+| 案例 2 · [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | 公开仓库（TypeScript，Cordis 插件框架） | 2026-09-07 读上游 `master` 源码，模式 18–24（含 3 条反例） |
+
+案例 1 是**一个项目的实践**，不是行业基线。案例 2 补上了它最薄弱的几项（M1 硬预算、L8 重试退避），也让「正向做法」和「同项目里的缺陷」第一次同时出现在同一个案例里——deepseek-harness 同时有全案例最好的重试退避，也有自文档化的「无内建轮次预算」。
+
+案例 1 之所以脱敏：它是被审计对象，不是学习来源，公开其名称没有信息增益。案例 2 是被学习对象，署名才有信息增益——需要复核做法时能直接去对源码。
+
+### 九个框架的官方文档与上游源码（差异矩阵，见 `references/framework-map.md`）
+
+每个框架每一项的判定都标了证据等级与核验日期。核验于 2026-09-07 **推翻了 10 处早期结论**，全部就地保留为 `⚠ 早期版本写 X 是错的`——保留错误记录是刻意的，它们证明凭记忆写的框架结论会错，且错的方式往往和直觉相反。
+
+已核验：LangGraph（最扎实）、OpenAI Agents SDK、Google ADK、smolagents、LlamaIndex、Crawl4AI。未核验、结论一律 `[待确认]`：AutoGen/AG2 整表（三代 API 语义不同）、deepagents（仅继承 LangGraph）。
+
+### 学习方法的四条规则
+
+这些比具体做法更耐用：
+
+1. **正向判据是准入条件，不是加分项。** 只避免负面漏点、但达不到正向判据的，判 `RISK` 不判 `OK`。
+2. **判效果，不判写法。** 目标项目用别的方式达到同一保证效果，同样算通过。
+3. **反例入册。** 同一个案例里的好写法和缺陷一起记——「重试机制设计得好、默认值却很糙」这类结论只有正反对照才出得来。
+4. **空行本身就是结论。** 挂载索引里有 7 项没有正向锚点，那是这些案例在这几项上确实没有可引的做法；为了填满索引而发明做法是造假。
 
 ## 已知局限
 
