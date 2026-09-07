@@ -1,0 +1,1298 @@
+{
+  "skill": "loop-engineering-check",
+  "skill_version": "1.3.0",
+  "generated_at": "2026-09-07T17:50:00+08:00",
+  "target": "github.com/limenagent/prodagent",
+  "target_snapshot": "/tmp/paf (gh api, 100/100 files, src/ 5012 lines)",
+  "framework": {
+    "declared": [
+      "pyproject.toml: dependencies = []"
+    ],
+    "used": [],
+    "introspected": false,
+    "introspection_note": "本机未安装该库，且无任何第三方 agent 框架可自省；全部证据来自本地源码 file:line",
+    "self_built_loop": true,
+    "self_built_evidence": [
+      "src/runtime/openai_lite.py:77-132 stdlib urllib 直发 /chat/completions",
+      "src/kernel/scheduler.py:173-247 手写 BSP 波次主循环 drive()",
+      "src/runtime/react.py:39-105 ReAct 由 3 节点 + 2 条件边 + 1 回边拼出"
+    ],
+    "uncategorized": []
+  },
+  "findings": [
+    {
+      "id": "M1",
+      "layer": "M",
+      "title": "硬预算熔断",
+      "verdict": "GAP",
+      "severity": "blocker",
+      "evidence": [
+        {
+          "path": "src/kernel/run.py",
+          "line": 104,
+          "snippet": "metrics = {\"waves\": 0, \"llm_calls\": 0, \"tool_calls\": 0}",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/body.py",
+          "line": 167,
+          "snippet": "self.run.metrics[\"llm_calls\"] += 1  # 递增但无上限读取",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/body.py",
+          "line": 177,
+          "snippet": "self.run.metrics[\"tool_calls\"] += 1",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 190,
+          "snippet": "if run.metrics[\"waves\"] > self.max_waves:  # 全库唯一的上限检查",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "在 scheduler.py:190 的既有检查旁加 max_llm_calls / max_tool_calls / max_tokens 联合熔断，复用 run.fail() + RUN_FAILED；再配 wall-clock 上限（Run.start 已有 started_at）",
+      "framework_note": "自研引擎，无框架兜底；计数器已存在但无任何代码作为上限读回"
+    },
+    {
+      "id": "M2",
+      "layer": "M",
+      "title": "检查点位置",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 190,
+          "snippet": "预算检查在 drive() 主循环内、每波一次（位置正确）",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/body.py",
+          "line": 167,
+          "snippet": "llm_calls 递增发生在节点执行时，比屏障早",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 199,
+          "snippet": "await asyncio.gather(...) 本波 8 个并发节点各调一次 LLM",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/agent.py",
+          "line": 165,
+          "snippet": "return Scheduler(llm=..., tools=..., bus=..., store=..., eventlog=...) — 未传 max_waves / max_depth，落回默认 64/8",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 92,
+          "snippet": "activate(): await self.scheduler.drive(spec, child) — 子 Run 复用父 Scheduler，故 SubPlanBody 路径继承上限",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "两条进入引擎的构造路径上限语义不一致：SubPlanBody 路径复用父 Scheduler（scheduler.py:82-105 的 self.scheduler.drive）继承 max_waves；Agent 路径 new 一个全新 Scheduler（agent.py:164-171）且未传 max_waves / max_depth，全部落回默认 64/8（scheduler.py:116-118）。给 Agent._scheduler() 补传这两个参数并在 Agent.__init__ 显式化，使「每条构造路径都接到配置」这一准入条件成立。",
+      "framework_note": "v1.3.0 正向判据把本项从「检查点位置对不对」（原判 RISK/minor：位置正确）升级为「所有进入引擎的路径是否一致」（GAP/major）。同一段代码，两个判据给出不同严重度。"
+    },
+    {
+      "id": "M3",
+      "layer": "M",
+      "title": "limiter 计数单位换算比",
+      "verdict": "RISK",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 199,
+          "snippet": "gather 全部就绪节点；265 行信号量只限并发度不限总量",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/graph.py",
+          "line": 211,
+          "snippet": "动态实例只要 pending 就立刻就绪",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/react.py",
+          "line": 81,
+          "snippet": "for call in ctx.shared[\"pending\"]: 单节点内遍历模型给的全部 tool_calls",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/body.py",
+          "line": 246,
+          "snippet": "SubPlanBody.run 在一个节点内递归跑完整个子 Run",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "把波数与成本解耦：M1 的直接计数器熔断后不再需要换算比；max_waves 保留作防自旋保险并注释说明",
+      "framework_note": "换算比不是常数且可任意大：1 波 ≈ 1 LLM + M tool_calls（纯 ReAct）；≈ N workers（plan-first）；≈ 一整个子 Run（SubPlanBody，最多 64 波）"
+    },
+    {
+      "id": "M4",
+      "layer": "M",
+      "title": "超限时行为",
+      "verdict": "OK",
+      "severity": "minor",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 192,
+          "snippet": "run.fail(f\"exceeded max waves {self.max_waves}; suspected spin (check that a back-edge makes progress)\")",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 193,
+          "snippet": "await self._emit(run, RUN_FAILED, {\"reason\": run.final_output}); break",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 378,
+          "snippet": "_final_output 直接返回终端输出，不合成任何答案",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "",
+      "framework_note": "对照 smolagents 超限会再调一次 LLM 合成\"看起来完整的最终答案\"并正常返回——本库是响亮失败，无合成答案，方向正确"
+    },
+    {
+      "id": "M5",
+      "layer": "M",
+      "title": "工具幻觉拦截",
+      "verdict": "OK",
+      "severity": "minor",
+      "evidence": [
+        {
+          "path": "src/runtime/tools.py",
+          "line": 118,
+          "snippet": "spec = self._tools.get(call.name); if spec is None: return ToolResult.failure(f\"no such tool: {call.name}\")",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/tools.py",
+          "line": 71,
+          "snippet": "duplicate tool name 在注册期 raise ValueError",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "",
+      "framework_note": "拒绝路径是 ToolResult.failure 反馈给模型自愈，不是抛异常炸图"
+    },
+    {
+      "id": "M6",
+      "layer": "M",
+      "title": "参数类型校验",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/runtime/tools.py",
+          "line": 122,
+          "snippet": "missing = [k for k in required if k not in arguments]  # 唯一的参数检查，只查缺失不查类型",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/tools.py",
+          "line": 43,
+          "snippet": "json_type = _PY_TO_JSON.get(p.annotation, \"string\")  # 未知注解降级 string，只描述不校验",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/tools.py",
+          "line": 155,
+          "snippet": "_invoke 只从签名取字段，多余字段被静默丢弃",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/mcp.py",
+          "line": 130,
+          "snippet": "t.get(\"inputSchema\", ...) 外部 schema 的 type/enum/minimum 约束内核一个不执行",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "在 dispatch() 的 missing 检查后加最小类型校验，走 ToolResult.failure 反馈通道（对齐 tools.py:124-126 的既有立场，不炸图）；多余字段也要告知模型",
+      "framework_note": ""
+    },
+    {
+      "id": "M7",
+      "layer": "M",
+      "title": "工具调用 JSON 结构完整性",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 222,
+          "snippet": "except json.JSONDecodeError: args = {}  # 截断 JSON 静默变空字典",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 229,
+          "snippet": "流式路径同样的 except: args = {}",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 206,
+          "snippet": "同一文件的反例：空流 raise RuntimeError 并保留 3 条原始 SSE 分片",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "把 except 分支从静默降级改成带诊断的显式失败（ToolResult 反馈通道或 RuntimeError 交给 retry），让参数不全成为可观测事件",
+      "framework_note": ""
+    },
+    {
+      "id": "M8",
+      "layer": "M",
+      "title": "工具执行失败回传",
+      "verdict": "OK",
+      "severity": "minor",
+      "evidence": [
+        {
+          "path": "src/runtime/tools.py",
+          "line": 138,
+          "snippet": "except Exception as exc: return ToolResult.failure(f\"{type(exc).__name__}: {exc}\")  # 工具异常变反馈不炸图",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/react.py",
+          "line": 83,
+          "snippet": "content = result.output if result.ok else f\"[tool error] {result.error}\"  # 回传模型自愈",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "",
+      "framework_note": "两级错误策略的命名是本库最可迁移的实践：模型级失败 → 反馈；结构性失败 → fail-fast 整个 Run"
+    },
+    {
+      "id": "M9",
+      "layer": "M",
+      "title": "上下文与状态完整性",
+      "verdict": "RISK",
+      "severity": "minor",
+      "evidence": [
+        {
+          "path": "src/kernel/channels.py",
+          "line": 49,
+          "snippet": "Channel 声明 allow_multi / empty / dtype；节点从不写共享状态，只返回 Outcome(state_delta)",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/channels.py",
+          "line": 135,
+          "snippet": "check_ambiguous 在屏障对 last 通道多写入者抛 AmbiguousWrite",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/channels.py",
+          "line": 122,
+          "snippet": "未声明通道写入 raise KeyError 并指名 writer 节点",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/run.py",
+          "line": 224,
+          "snippet": "先在本波内从 channel.empty 聚合再折进历史 → 重放不重复计数",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/context.py",
+          "line": 99,
+          "snippet": "_tool_groups 把工具调用父消息与结果当不可拆原子组，切分点回退到原子边界",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/workflow.py",
+          "line": 83,
+          "snippet": "for k in outcome.state_delta: if k not in plan.channels: plan.channels[k] = last(None) — 门面层为未声明 key 自动补通道",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "内核层的声明式通道 + reducer + allow_multi 仍是本审计里最强的正向实践；门面层 _FacadeBody（workflow.py:83-85）为未声明的 state key 自动补 last 通道，与内核层 channels.py:122-127 的硬错误（KeyError 并指名 writer 节点）不一致。给 Workflow 加 allow_undeclared_state: bool = False 开关，默认严格，落到内核层报错；同时门面层无法为自动补的通道设置 dtype 守卫（channels.py:128-133）。",
+      "framework_note": "v1.3.0 重查把原判 OK 收窄为 RISK：门面层放宽了一部分内核层的声明约束。注意 last() 工厂把 allow_multi 置 False（channels.py:80），所以并发歧义仍被 check_ambiguous()（channels.py:135-147）挡住——最要紧的防线在门面层依然有效。真正丢的是：① 拼写错误拦截点从构造期后移到运行期；② dtype 守卫失效；③ 用户从门面层养成「写什么 key 都行」的习惯会带进内核层。黑板模式 multiagent.py:168 用内核层 Plan 且显式声明 board 为 append()，是这条约束的正确示范。"
+    },
+    {
+      "id": "M10",
+      "layer": "M",
+      "title": "部分输出与流式完整性",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 216,
+          "snippet": "msg = raw[\"choices\"][0][\"message\"]  # _reply_from 不读 finish_reason",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 171,
+          "snippet": "if piece == b\"[DONE]\": break  # 流式结束不核对最后一个 chunk 的终结原因",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 100,
+          "snippet": "max_tokens 默认 8192（reasoning 模型思考会占输出预算）",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "LlmReply 加 truncated 字段，_reply_from 读 finish_reason（\"length\"/\"max_tokens\"）；ReAct 的 think 在 truncated 时不视为最终答案",
+      "framework_note": "grep finish_reason/stop_reason/truncated 全库零命中；与 M7 叠加（截断 args → 静默 {} → 空调用）"
+    },
+    {
+      "id": "M11",
+      "layer": "M",
+      "title": "错误恢复与可重试性",
+      "verdict": "OK",
+      "severity": "minor",
+      "evidence": [
+        {
+          "path": "src/kernel/graph.py",
+          "line": 53,
+          "snippet": "retry_on: tuple | Callable = (Exception,)  # 机制支持谓词过滤",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/graph.py",
+          "line": 60,
+          "snippet": "matches() 接受 tuple 或 predicate",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 294,
+          "snippet": "except asyncio.CancelledError: raise  # 取消永不被重试",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "机制合格；默认值 (Exception,) 过宽的问题记在 L8",
+      "framework_note": ""
+    },
+    {
+      "id": "M12",
+      "layer": "M",
+      "title": "输出契约校验",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 378,
+          "snippet": "_final_output 原样返回终端节点输出",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/react.py",
+          "line": 93,
+          "snippet": "final = lambda x, ctx: Outcome.ok(ctx.shared[\"answer\"])  # 模型自由文本直入 answer 通道",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/agent.py",
+          "line": 160,
+          "snippet": "return await self._run_standalone(str(input or \"\"))  # 子 Agent 返回 list 会被 str() 成 Python repr",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "文档明确 final_output 无契约保证；若要做，在 Node 加可选 output_schema，在 _final_output 处校验失败走 run.fail()",
+      "framework_note": ""
+    },
+    {
+      "id": "M13",
+      "layer": "M",
+      "title": "安全护栏",
+      "verdict": "RISK",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/runtime/tools.py",
+          "line": 58,
+          "snippet": "side_effect: str = \"read\"",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/tools.py",
+          "line": 128,
+          "snippet": "if side_effect == \"write\" and write_needs_approval: verdict = await bus.check(...)",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/bus.py",
+          "line": 136,
+          "snippet": "check() fail-closed：checker 抛异常返回 BlockingResult(False, ...) —— 坏掉的审批器是否决票",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/multiagent.py",
+          "line": 89,
+          "snippet": "委派工具标 side_effect=\"read\"，但会递归 spawn 子 Run 触达子 agent 的 write 工具",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/mcp.py",
+          "line": 78,
+          "snippet": "load_mcp_tools 把所有 MCP 工具硬编码 side_effect=\"read\"",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "MCP 工具改默认 write（fail-safe 方向）+ 支持显式声明 read 名单；委派工具标 write 或让审批门检查可达写工具集合；prompt injection / PII 在文档标注为已知缺口",
+      "framework_note": "权限机制真实存在且 fail-closed，问题在分类覆盖完整性——write_needs_approval=True 是默认值但 MCP 路径完全绕过"
+    },
+    {
+      "id": "M14",
+      "layer": "M",
+      "title": "模型不确定性记录",
+      "verdict": "RISK",
+      "severity": "minor",
+      "evidence": [
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 86,
+          "snippet": "temperature: float = 0.0  # 默认确定，但从不记录",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/ports.py",
+          "line": 19,
+          "snippet": "LlmReply 只有 text / tool_calls / tokens，无模型标识",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 216,
+          "snippet": "_reply_from 不读响应侧 raw.get(\"model\")",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "LlmReply 加 model / temperature 可选字段，NODE_COMPLETED 事件带上，让归因可回答",
+      "framework_note": "默认 temperature=0 + ScriptedLlm 使教学路径确定；风险仅在用户覆盖参数或换模型时出现"
+    },
+    {
+      "id": "L1",
+      "layer": "L",
+      "title": "外层编排循环边界",
+      "verdict": "OK",
+      "severity": "minor",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 190,
+          "snippet": "max_waves 检查 + run.fail() + RUN_FAILED + break，超限响亮失败",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 364,
+          "snippet": "_settle 区分 done 与 \"graph stalled: no ready node but unfinished nodes remain {pending}\"",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/graph.py",
+          "line": 257,
+          "snippet": "sweep_skipped 只在无就绪节点时做死分支清理，不杀可能被回边激活的分支",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "",
+      "framework_note": "_settle 的 done-vs-stalled 区分是本库 L7/L1 最该学的一条"
+    },
+    {
+      "id": "L2",
+      "layer": "L",
+      "title": "预算下传",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 282,
+          "snippet": "子 Run 复用 self 作为 scheduler：max_depth 共享但 metrics 各自从 0 开始",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/run.py",
+          "line": 104,
+          "snippet": "每个子 Run 的 metrics 从 {\"waves\": 0, ...} 重新开始",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/agent.py",
+          "line": 164,
+          "snippet": "Agent._scheduler() 构造 Scheduler 时未传 max_waves，用默认 64",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "引入跨 Run 树的共享计数器字典，随 SubagentActivator.activate() 下传，子 Run 的 drive() 检查同一个字典；与 M1 是同一个改动",
+      "framework_note": "max_depth 全局递减是正确的；被拦的是嵌套层数，拦不住每层的总工作量——8 层 × 每层 64 波可指数放大"
+    },
+    {
+      "id": "L3",
+      "layer": "L",
+      "title": "委派深度与广度",
+      "verdict": "PENDING",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 83,
+          "snippet": "深度守卫：max_depth 递减到 0 raise；注释 \"far more reliable than trusting the model to remember not to call each other\"",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/run.py",
+          "line": 207,
+          "snippet": "add_instance() 无实例数上限，每次 Send 都新增节点",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/plan_first.py",
+          "line": 55,
+          "snippet": "sends = [Send(\"worker\", step, key=step[\"id\"]) for step in steps]，steps 数量由模型输出决定无裁剪",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 265,
+          "snippet": "信号量限并发度，不限本波实例总数",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "run.add_instance() 加 max_instances 上限（超限作构建期错误）；plan_first.py:55 加 steps[:MAX_STEPS] 并把裁掉的写进 state_delta",
+      "framework_note": "深度有结构性守卫（max_depth），广度完全无上限：1000 个 Send = 下一波 1000 个就绪节点，max_waves 只走 1 波拦不住。标 PENDING 因 steps 数量可能由调用方 prompt 约束"
+    },
+    {
+      "id": "L4",
+      "layer": "L",
+      "title": "外层决策可判定性",
+      "verdict": "RISK",
+      "severity": "minor",
+      "evidence": [
+        {
+          "path": "src/runtime/react.py",
+          "line": 62,
+          "snippet": "if reply.tool_calls:  # 纯机器判定",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/graph.py",
+          "line": 244,
+          "snippet": "_join_satisfied：any / all / callable，可机器判定",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/multiagent.py",
+          "line": 143,
+          "snippet": "blackboard moderator 判定\"共识是否达成\"靠模型判断",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "moderator 改成结构化输出 {\"consensus\": bool, \"verdict\": ...}，false 时最多再跑 3 轮后强制收敛到\"记录分歧\"",
+      "framework_note": "绝大部分分支可机器判定，唯一例外是 blackboard 共识判定"
+    },
+    {
+      "id": "L5",
+      "layer": "L",
+      "title": "检查点与恢复",
+      "verdict": "OK",
+      "severity": "minor",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 240,
+          "snippet": "suspend 总是落盘；sync 模式下每波落盘",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/body.py",
+          "line": 103,
+          "snippet": "NodeContext 是 wiring 不是 data，永不序列化——\"that boundary keeps checkpoints clean\"",
+          "confidence": "source"
+        },
+        {
+          "path": "src/backends/file_store.py",
+          "line": 22,
+          "snippet": "临时文件 + os.replace 原子写；expected_version 乐观并发",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "",
+      "framework_note": "wiring-vs-data 边界让检查点自动干净，无需额外机制；跨恢复的幂等断裂记在 L6"
+    },
+    {
+      "id": "L6",
+      "layer": "L",
+      "title": "副作用幂等与去重",
+      "verdict": "RISK",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/types.py",
+          "line": 60,
+          "snippet": "ToolCall.call_id 文档写明 at-least-once + idempotency = exactly-once",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/body.py",
+          "line": 180,
+          "snippet": "call_id = f\"{run_id}:{node_id}:{attempt}\"  # 不含工具名与参数",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/react.py",
+          "line": 81,
+          "snippet": "单节点 attempt 内循环多工具调用，全部共享同一 attempt → 同一 call_id",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/tools.py",
+          "line": 117,
+          "snippet": "dispatch() 完全未读 call.call_id 做去重——纯约定",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "幂等键加参数摘要 digest（sha1(name|sorted-args)[:12]）；dispatch() 加可选 dedup_store 钩子让去重变成框架强制；另需处理 Goto re-arm 递增 attempts 导致的跨恢复键漂移",
+      "framework_note": "意图明确但键碰撞：read_weather(city=北京) 与 read_weather(city=上海) 会被去重器当成同一次调用——去重错比不去重更糟（静默丢操作）"
+    },
+    {
+      "id": "L7",
+      "layer": "L",
+      "title": "失败收敛策略",
+      "verdict": "RISK",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 207,
+          "snippet": "节点异常 → fail-fast 整个 Run",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 94,
+          "snippet": "子 Run 失败向父 Run 传播",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/graph.py",
+          "line": 37,
+          "snippet": "RetryPolicy max_attempts/timeout，耗尽后向上抛",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 364,
+          "snippet": "_settle 响亮失败于 stalled 而不是给半成品",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/run.py",
+          "line": 52,
+          "snippet": "Run.park() 存在但调度器从不自动调用",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "RetryPolicy 加 on_exhausted: \"fail\"|\"park\"，park 时走 run.park(kind=\"approval_needed\", question=<错误>) 而不是抛异常——复用已有的 wait_human() 原语",
+      "framework_note": "fail-fast 路径清晰且响亮，缺的是中间态：重试耗尽 = 整个 Run 失败，无\"停下来等人\"路径"
+    },
+    {
+      "id": "L8",
+      "layer": "L",
+      "title": "重试策略与退避",
+      "verdict": "RISK",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/graph.py",
+          "line": 55,
+          "snippet": "return self.base_delay * (self.factor ** failed_attempt)  # 无 jitter 无上限",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/graph.py",
+          "line": 53,
+          "snippet": "retry_on 默认 (Exception,)  # 会重试程序 bug",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 294,
+          "snippet": "CancelledError 不被重试（正确）",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "delay_for 加 full jitter 与 max_delay 上限；文档标注 (Exception,) 默认会重试 bug，生产建议收窄到 (TimeoutError, ConnectionError)",
+      "framework_note": ""
+    },
+    {
+      "id": "L9",
+      "layer": "L",
+      "title": "跨 Agent 结果一致性",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/runtime/plan_first.py",
+          "line": 67,
+          "snippet": "default_synth: return Outcome.ok(inputs)  # 原样返回 N 个 worker 输出，无冲突检测",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/multiagent.py",
+          "line": 51,
+          "snippet": "build_pipeline 静态串联，上游输出直喂下游",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/agent.py",
+          "line": 139,
+          "snippet": "委派返回 run.final_output 字符串，无法携带\"与另一路径矛盾\"的标记",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "synth 节点要求结构化输出含 conflicts 数组，并 emit 一条\"存在矛盾\"事件；单一事实来源需新增机制",
+      "framework_note": "两个 worker 返回矛盾结论时 synth 并列放入 list，supervisor 的模型自己决定相信谁——不可复现、不可审计"
+    },
+    {
+      "id": "L10",
+      "layer": "L",
+      "title": "验收与 Goodhart 防护",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/graph.py",
+          "line": 281,
+          "snippet": "is_done() 只查\"所有节点到终态\"——结构完成不是任务完成",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 378,
+          "snippet": "_final_output() 无验收步骤",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "Plan 加可选 verifier: NodeBody，在 _settle 判 done 前跑一次，Outcome 决定通过或 Goto 打回；verifier 不得修改被验收对象",
+      "framework_note": "grep verifier/acceptance/done_criteria 零命中。code agent 删掉一个失败的测试用例后 is_done() 仍返回 True"
+    },
+    {
+      "id": "X1",
+      "layer": "X",
+      "title": "可观测性",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/eventlog.py",
+          "line": 25,
+          "snippet": "9 种事件类型 RUN_STARTED/COMPLETED/FAILED/SUSPENDED + NODE_STARTED/COMPLETED/FAILED/RETRY + STATE_DELTA",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 302,
+          "snippet": "NODE_RETRY 带 {attempt, error, backoff}（好）",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/body.py",
+          "line": 167,
+          "snippet": "llm_calls/tokens 只进 run.metrics，中间过程不可见",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/tools.py",
+          "line": 117,
+          "snippet": "dispatch() 不 emit，工具名与参数不进事件",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "在 body.py:166 与 tools.py:133 各加一个 ctx.emit()（llm_call / tool_call），用已有 NodeContext.emit，无需新增事件类型",
+      "framework_note": "能回答\"哪个节点失败、重试几次、退避多少\"，回答不了\"花了多少钱\"和\"哪个工具调用导致了问题\""
+    },
+    {
+      "id": "X2",
+      "layer": "X",
+      "title": "可重放",
+      "verdict": "PENDING",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/eventlog.py",
+          "line": 45,
+          "snippet": "apply_event/fold_events 纯函数，STATE_DELTA 存波次增量 → 重放不重复计数",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/body.py",
+          "line": 166,
+          "snippet": "LlmReply 返回后只在节点内消费，不 emit",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 86,
+          "snippet": "temperature=0.0 默认但未记录\"这次用的是 0.0\"",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "llm_chat 后 emit 带 reply.text / tool_calls 的事件；可只对决策性调用（带 tool_calls）记全文、纯文本记 hash 控制体积",
+      "framework_note": "能重建状态，重建不了这次运行。ScriptedLlm 路径已可复现，OpenAICompatibleLlm 路径缺口真实——取决于实际用途"
+    },
+    {
+      "id": "X3",
+      "layer": "X",
+      "title": "人机交接",
+      "verdict": "PENDING",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/run.py",
+          "line": 52,
+          "snippet": "Run.park()/resume() 严格匹配 pending interrupt 的 key",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 240,
+          "snippet": "suspend 总是落盘，跨进程可恢复",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 159,
+          "snippet": "resume 值 dict-vs-裸值的消歧是启发式的",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/workflow.py",
+          "line": 64,
+          "snippet": "wait_human() 是显式调用，只有 prompt 写了才生效",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "Interrupt.kind 做枚举校验；resume() 加 as_value 参数消歧；自动升级接上 L7 的 on_exhausted=\"park\"",
+      "framework_note": "基础设施完整（暂停/恢复/跨进程/乐观并发），触发条件全靠 prompt 自律"
+    },
+    {
+      "id": "X4",
+      "layer": "X",
+      "title": "环境一致性",
+      "verdict": "GAP",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/runtime/llm.py",
+          "line": 56,
+          "snippet": "if os.getenv(\"OPENAI_API_KEY\"): return OpenAICompatibleLlm()  # 静默切模型",
+          "confidence": "source"
+        },
+        {
+          "path": "src/runtime/openai_lite.py",
+          "line": 90,
+          "snippet": "4 个环境变量静默影响行为：API_KEY / BASE_URL / MODEL / MAX_TOKENS",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 116,
+          "snippet": "默认值硬编码在构造参数，无配置文件无环境标识",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "env_llm() 切换时显式记录（RUN_STARTED 带 model_kind 字段）；4 个环境变量收进 ModelConfig dataclass",
+      "framework_note": "同一份代码有无 API key 时行为差异巨大（ScriptedLlm 完全确定 vs OpenAICompatibleLlm 会截断+丢 JSON），且无任何日志告知切换"
+    },
+    {
+      "id": "X5",
+      "layer": "X",
+      "title": "配置漂移",
+      "verdict": "RISK",
+      "severity": "major",
+      "evidence": [
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 121,
+          "snippet": "durability 白名单校验，拼错 raise ValueError（好）",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/bus.py",
+          "line": 103,
+          "snippet": "on_full 白名单校验 block/drop，拼错 raise（好）",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/graph.py",
+          "line": 119,
+          "snippet": "Plan.validate() 构建期失败：悬挂边/未知 entry/join 策略拼错（好）",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 116,
+          "snippet": "max_waves/concurrency/max_depth 接受任意 int，零校验",
+          "confidence": "source"
+        },
+        {
+          "path": "src/kernel/scheduler.py",
+          "line": 265,
+          "snippet": "asyncio.Semaphore(concurrency) 传 0 时永久死锁，无异常无日志",
+          "confidence": "source"
+        }
+      ],
+      "recommendation": "Scheduler.__init__ 加 concurrency >= 1 / max_waves >= 1 / max_depth >= 1 校验，对齐已有的白名单风格",
+      "framework_note": "枚举类配置校验做得很好（fail-closed on typo），数字类完全无校验：concurrency=0 硬死锁，max_waves=-1 等于无上限"
+    }
+  ],
+  "practices_worth_absorbing": [
+    {
+      "practice": "声明式状态通道 + reducer + allow_multi，歧义写变成不可表达的状态",
+      "anchors": [
+        "src/kernel/channels.py:49-95",
+        "src/kernel/channels.py:135-147",
+        "src/kernel/run.py:224-243"
+      ],
+      "relates_to": [
+        "M9"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "未声明通道写入 = 硬错误并指名 writer 节点；边界处校验 dtype",
+      "anchors": [
+        "src/kernel/channels.py:122-132"
+      ],
+      "relates_to": [
+        "M9"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "Goto.now vs Goto.rejoin 区分\"重激活要等前驱\"与\"立刻就绪\"",
+      "anchors": [
+        "src/kernel/command.py:36-71",
+        "src/runtime/react.py:70",
+        "src/runtime/multiagent.py:156",
+        "src/runtime/plan_first.py:64"
+      ],
+      "relates_to": [
+        "L1",
+        "L4"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "_settle 区分 done 与 stalled；sweep_skipped 只在无就绪节点时清理，不杀可被回边激活的分支",
+      "anchors": [
+        "src/kernel/scheduler.py:364-376",
+        "src/kernel/graph.py:257-279"
+      ],
+      "relates_to": [
+        "L1",
+        "L7"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "两级错误策略的命名：模型级失败→反馈给模型；结构性失败→fail-fast 整个 Run",
+      "anchors": [
+        "src/runtime/tools.py:122-126",
+        "src/runtime/tools.py:138-139",
+        "src/runtime/react.py:83",
+        "src/kernel/scheduler.py:207-212"
+      ],
+      "relates_to": [
+        "M8",
+        "L7"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "构建期 Plan.validate()：悬挂边/未知 entry/join 拼错在构建期失败",
+      "anchors": [
+        "src/kernel/graph.py:119-141",
+        "src/kernel/graph.py:158-163"
+      ],
+      "relates_to": [
+        "L1",
+        "X5"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "深度守卫作为结构性强制，不信任模型自律",
+      "anchors": [
+        "src/kernel/scheduler.py:83-91"
+      ],
+      "relates_to": [
+        "L3"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "枚举白名单校验在构造期 fail-closed，不回落到默认值",
+      "anchors": [
+        "src/kernel/scheduler.py:121-122",
+        "src/kernel/bus.py:103-104"
+      ],
+      "relates_to": [
+        "X5"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "审批 fail-closed：checker 抛异常是否决票，永远不是放行票",
+      "anchors": [
+        "src/kernel/bus.py:136-148"
+      ],
+      "relates_to": [
+        "M13",
+        "X3"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "背压策略具名且可数：block 背压上游，drop 时 self.dropped 计数",
+      "anchors": [
+        "src/kernel/bus.py:54-64"
+      ],
+      "relates_to": [
+        "X1"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "wiring-vs-data 边界 + ctx.shared 只读视图，让\"节点直接改状态\"变成不合法调用",
+      "anchors": [
+        "src/kernel/body.py:103-110",
+        "src/kernel/body.py:131-135"
+      ],
+      "relates_to": [
+        "L5"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "事件溯源记录波次增量而非全量，两阶段折叠使重放不重复计数",
+      "anchors": [
+        "src/kernel/eventlog.py:45-62",
+        "src/kernel/run.py:224-243"
+      ],
+      "relates_to": [
+        "X2"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "上下文裁剪按原子组（工具调用父消息 + 其结果不可拆），切分点回退到原子边界",
+      "anchors": [
+        "src/runtime/context.py:99-123",
+        "src/runtime/context.py:233-241"
+      ],
+      "relates_to": [
+        "M9"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "压缩分级：机械手段优先，只有摘要级才花模型的钱；last_level 可观测",
+      "anchors": [
+        "src/runtime/context.py:79-96",
+        "src/runtime/context.py:172-179",
+        "src/runtime/context.py:141-146"
+      ],
+      "relates_to": [
+        "M9"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "原子写检查点（临时文件 + os.replace）+ expected_version 乐观并发",
+      "anchors": [
+        "src/backends/file_store.py:22-25",
+        "src/backends/file_store.py:36-51"
+      ],
+      "relates_to": [
+        "L5"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "超限响亮失败且绝不合成答案（对照 smolagents 编造完成品）",
+      "anchors": [
+        "src/kernel/scheduler.py:192-196",
+        "src/kernel/scheduler.py:378-385"
+      ],
+      "relates_to": [
+        "M4",
+        "L7"
+      ],
+      "layer": "L"
+    },
+    {
+      "practice": "空模型流大声失败并保留原始片段（同文件 except: args = {} 是反面教材）",
+      "anchors": [
+        "src/runtime/openai_lite.py:200-209",
+        "src/runtime/openai_lite.py:222-230"
+      ],
+      "relates_to": [
+        "M7",
+        "M10"
+      ],
+      "layer": "M"
+    },
+    {
+      "practice": "side_effect 分类 + 执行前审批门（连 3 个绕过反例一起吸取：委派标 read、MCP 全标 read、无注入处理）",
+      "anchors": [
+        "src/runtime/tools.py:58",
+        "src/runtime/tools.py:128-131",
+        "src/runtime/multiagent.py:89",
+        "src/runtime/mcp.py:78"
+      ],
+      "relates_to": [
+        "M13"
+      ],
+      "layer": "M"
+    },
+    {
+      "practice": "两层调用约定兼容（业务函数按名注入 / 适配器接收整个 arguments dict），MCP 与本地函数走同一 pipeline",
+      "anchors": [
+        "src/runtime/tools.py:141-167"
+      ],
+      "relates_to": [
+        "M5",
+        "M6"
+      ],
+      "layer": "M"
+    },
+    {
+      "practice": "流式与非流式最终同归一到一个 _reply_from，产出同一个 LlmReply",
+      "anchors": [
+        "src/runtime/openai_lite.py:77-145",
+        "src/runtime/openai_lite.py:214-233"
+      ],
+      "relates_to": [
+        "M7",
+        "M10"
+      ],
+      "layer": "M"
+    },
+    {
+      "practice": "coerce_outcome 的列表判定很克制：仅当全部元素是 Command/Outcome 才当控制组",
+      "anchors": [
+        "src/kernel/body.py:77-92"
+      ],
+      "relates_to": [
+        "M8"
+      ],
+      "layer": "M"
+    },
+    {
+      "practice": "context/memory/skills 全部是可替换策略（Protocol），kernel 完全不知道它们存在",
+      "anchors": [
+        "src/runtime/context.py:24-25",
+        "src/runtime/memory.py:32-36",
+        "src/runtime/react.py:46-52"
+      ],
+      "relates_to": [
+        "M11"
+      ],
+      "layer": "M"
+    },
+    {
+      "practice": "max_tokens 默认值带理由注释（reasoning 模型思考占输出预算，网关默认 1024 会截断到空）",
+      "anchors": [
+        "src/runtime/openai_lite.py:97-100"
+      ],
+      "relates_to": [
+        "M10"
+      ],
+      "layer": "M"
+    }
+  ],
+  "summary": {
+    "blockers": 1,
+    "gaps": 11,
+    "risks": 9,
+    "ok": 6,
+    "na": 0,
+    "pending_confirmation": 3,
+    "total": 29,
+    "verdict": "BLOCK",
+    "counting_note": "blockers 是严重度叠加计数（M1 同时计入 gaps），不是分区项。gaps + risks + ok + na + pending_confirmation = total。早期版本把 blockers 也加进了 total，导致 total=30 而 findings 只有 29 条。"
+  },
+  "layer_breakdown": {
+    "M": {
+      "ok": 4,
+      "gap": 6,
+      "risk": 4,
+      "pending": 0,
+      "total": 14
+    },
+    "L": {
+      "ok": 2,
+      "gap": 3,
+      "risk": 4,
+      "pending": 1,
+      "total": 10
+    },
+    "X": {
+      "ok": 0,
+      "gap": 2,
+      "risk": 1,
+      "pending": 2,
+      "total": 5
+    }
+  },
+  "confidence": "source",
+  "evidence_note": "全部为 [源码确认]（本地 /tmp/paf file:line）。无 [自省实测]：本机未安装该库，也无第三方框架可自省。无 [版本知识] 升级的结论。",
+  "not_audited": [
+    "src/playground/server.py（交互式入口，可能有未审计的配置路径）",
+    "src/kernel/__init__.py",
+    "examples/（21 个示例）",
+    "docs/（未全文读）"
+  ],
+  "test_coverage_note": "17 个测试文件、1233 行、约 69 个测试函数；锁住了 AmbiguousWrite / max_waves 防自旋 / backpressure / subrun 深度守卫 / 纯函数性。无预算或成本相关测试——与 M1 判定一致。",
+  "ci_gate": "python -c \"import json,sys; sys.exit(1 if json.load(open('loop-audit.json',encoding='utf-8'))['summary']['blockers']>0 else 0)\"",
+  "reaudit": {
+    "skill_version_used": "1.3.0",
+    "at": "2026-09-07T21:15:33+08:00",
+    "what_changed": "v1.3.0 给不变式表加了「正向判据」——不只问漏点犯没犯，还问做得好的那条线达到没有。",
+    "verdict_changes": [
+      {
+        "id": "M2",
+        "from": "RISK/minor",
+        "to": "GAP/major",
+        "reason": "原判只查检查点位置（正确）；新判据要求每一条进入引擎的构造路径都接到配置，Agent._scheduler() 没接到。"
+      },
+      {
+        "id": "M9",
+        "from": "OK/minor",
+        "to": "RISK/minor",
+        "reason": "内核层仍是正向标杆，但门面层 _FacadeBody 放宽了声明约束，与内核层策略不一致。"
+      }
+    ],
+    "unchanged": "其余 27 项结论不变，说明正向判据是收敛的，不是把 OK 批量打成 RISK。",
+    "no_anchor_items": [
+      "M1",
+      "M6",
+      "M12",
+      "M14",
+      "L2",
+      "L9",
+      "X4"
+    ],
+    "no_anchor_note": "v1.3.0 的正向实践库有 7 项没有锚点（M1/M6/M12/M14/L2/L9/X4），另有 L10 只有半个锚点（模式 3 的 fail-fast 命名只解决了「死得响不响」，没解决「挂起等人工」和「验收器」两半）。判据缺失而非项目缺失，报告 §8.3 已写明。早期版本误记为「M14/L9/L10/X4 四项」，且错把有锚点的 L10 计入空行集合。",
+    "half_anchor_items": [
+      "L10"
+    ]
+  }
+}
