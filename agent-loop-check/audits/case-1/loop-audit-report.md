@@ -1,7 +1,7 @@
-# Loop Engineering 审计报告：prodagent
+# Loop Engineering 审计报告：自研 BSP 波次引擎（案例 1）
 
 ```
-审计对象：github.com/limenagent/prodagent（本地快照 /tmp/paf/，gh api 抓取 100/100 文件，src/ 5012 行）
+审计对象：自研 BSP 波次引擎（案例 1；本地快照 /tmp/paf/，gh api 抓取 100/100 文件，src/ 5012 行）
 框架：自研 loop，无框架兜底　　审计时间：2026-09-07T17:50:00+08:00
 结论：BLOCK
 阻断级 1 项　缺口 11 项　风险 9 项　通过 6 项　待确认 3 项（合计 29 = M14 + L10 + X5，M/L/X 三层全覆盖）
@@ -668,7 +668,7 @@ if self.max_depth < 1:
 
 ## 7. 关于本审计自身的注记
 
-- **只读**：未修改 prodagent 的任何文件。源码通过 `gh api` 拉到本地 `/tmp/paf/`（GitHub 443 端口 `git clone` 连续 6 次失败，改用 API 逐文件抓取，100/100 文件完整）。
+- **只读**：未修改被审计项目的任何文件。源码通过 `gh api` 拉到本地 `/tmp/paf/`（GitHub 443 端口 `git clone` 连续 6 次失败，改用 API 逐文件抓取，100/100 文件完整）。
 - **证据等级**：全篇 `[源码确认]`（本地 file:line）。无 `[自省实测]`（本机未安装该库，也无外部框架可自省）；无 `[版本知识]` 升级的结论。
 - **未读的文件**：`src/playground/server.py`、`src/kernel/__init__.py`、`examples/`、`docs/` 全文。这些不影响 M1–M14 / L1–L10 / X1–X5 的判定，但如果要精确计算"实际部署配置的漂移面"，`playground/server.py` 值得补读（它暴露了交互式入口，可能有未审计的配置路径）。
 - **测试覆盖**：17 个测试文件、1233 行、约 69 个测试函数，锁住了大部分行为。`tests/` 里**没有**预算/成本相关的测试——这与 M1 的判定一致。

@@ -2,7 +2,7 @@
   "skill": "loop-engineering-check",
   "skill_version": "1.3.0",
   "generated_at": "2026-09-07T17:50:00+08:00",
-  "target": "github.com/limenagent/prodagent",
+  "target": "自研 BSP 波次引擎（案例 1）",
   "target_snapshot": "/tmp/paf (gh api, 100/100 files, src/ 5012 lines)",
   "framework": {
     "declared": [
