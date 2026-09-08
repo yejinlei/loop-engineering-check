@@ -96,15 +96,15 @@ python -c "import json,sys; sys.exit(1 if json.load(open('loop-audit.json',encod
 
 ```
 loop-engineering-check/
-├── SKILL.md                     # 技能主体（216 行，含 29 项速览表 + M/L/X 三层详表与正向判据）
+├── SKILL.md                     # 技能主体（227 行，含 29 项速览表 + M/L/X 三层详表与正向判据）
 ├── README.md                    # 本文件
 ├── LICENSE
 ├── references/
-│   ├── framework-map.md         # 8 个框架矩阵 + LangChain（不占独立矩阵）+ 自研 loop（587 行，带目录）
+│   ├── framework-map.md         # 8 个框架矩阵 + LangChain（不占独立矩阵）+ 自研 loop（641 行，带目录）
 │   ├── loop-engineering-patterns.md  # 正向实践库：6 个案例、54 条做法（1635 行）
 │   └── report-template.md       # 报告与 JSON 结构模板
 └── scripts/
-    └── static-hints.py          # 只读静态提示扫描器（标准库）
+    └── static-hints.py          # 只读静态提示扫描器（标准库，562 行）
 ```
 
 ## 实践来源

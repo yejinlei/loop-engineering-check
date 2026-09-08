@@ -27,7 +27,7 @@ M 层的价值全部在这一份文件里。**每个框架的每一格都必须�
 | 节 | 内容 | 证据等级 |
 |---|---|---|
 | LangGraph | Pregel superstep 计数、并发写会炸 | `[官方文档确认]` 最扎实 |
-| LangChain | 上层封装，不新增 loop 语义 | `[版本知识]` |
+| LangChain | 上层封装；1.3.9 中间件默认值与 agent 工厂的 `recursion_limit=9999` | `[版本知识]` + `[自省实测]` |
 | deepagents | 继承 LangGraph 的推断 | **未核验**，`[待确认]` |
 | Google ADK | template workflow 与 2.0 graph workflow 分叉 | `[官方文档确认]` 关键分歧点 |
 | Crawl4AI | 无 agentic 策略；价值在 M13 与 L 层 | `[官方文档确认]` |
@@ -38,6 +38,7 @@ M 层的价值全部在这一份文件里。**每个框架的每一格都必须�
 | 自研 loop | 无框架兜底的主路径 | — |
 | 如何新增一个框架 | 模板 | — |
 | 核验记录（2026-09-07） | 已核验 / 未核验 / 网络可达性 | — |
+| 自省记录（2026-09-08，第二轮） | langchain 1.3.9 中间件默认值、agent 工厂的 `recursion_limit=9999` | `[自省实测]` 绑定本机版本 |
 
 > 每个框架节末尾都有对应的自省片段；「如何新增一个框架」是补录模板，不要当成已有框架读。
 
@@ -52,7 +53,7 @@ M 层的价值全部在这一份文件里。**每个框架的每一格都必须�
 | M1 | `框架已保证`（有上限参数） | 存在轮次/递归上限参数，但**默认值偏宽**，且只限轮次 |
 | M2 | `默认不安全需自加` | 上限只在 `invoke` 入口生效一次，内部嵌套循环不受约束 |
 | M3 | **`框架特有风险`** | 计数单位是 **step（即 Pregel 的一个 superstep）**，不是「节点执行次数」，也不是 LLM 调用数。一个 step 是「计划→并行执行→更新」的完整三阶段，内部可含**多个并行节点**。换算比是**多对一且不可预测**：单线路径下 1 step ≈ 1 次节点执行（≈ 2:1 于 LLM 调用），但并行分支下 1 step 可含 N 次节点执行。`[官方文档确认]` pregel.md「Pregel organizes the execution of the application into multiple steps… Repeat until no actors are selected for execution, or a maximum number of steps is reached」+ GRAPH_RECURSION_LIMIT.md「reached the maximum number of steps」。**⚠ 早期版本写「数节点执行次数、ReAct 一步≈2 节点执行」是错的**：把 node 数当预算会同时高估和低估，取决于图里有没有并行分支 |
-| M4 | `框架已保证`（硬抛异常） | 超限抛 `GraphRecursionError`。优点是能看见，缺点是**整个 invoke 挂掉**，你需要自己决定这算失败还是部分成功 |
+| M4 | `框架已保证`（硬抛异常） | 超限抛 `GraphRecursionError`。优点是能看见，缺点是**整个 invoke 挂掉**，你需要自己决定这算失败还是部分成功。`[自省实测]` 2026-09-08 langgraph（deepseek_det2 的 `.venv312`）确认 `from langgraph.errors import GraphRecursionError` 可导入，本表此项是硬异常路径，不是合成答案。⚠ 但**上层 agent 工厂可能把上限抬到近乎无界**：见下方 L2 行 |
 | M5 | `默认不安全需自加` | **框架不拦工具名**。LLM 返回未注册工具名时，`ToolNode` 把错误塞回 message，不报错——agent 继续跑，基于错误状态 |
 | M6 | `默认不安全需自加` | 无内建参数 schema 校验闸门；错误同样只进 message |
 | M7 | `默认不安全需自加` | 框架不校验 tool_call arguments 的 JSON 闭合性 |
@@ -63,7 +64,7 @@ M 层的价值全部在这一份文件里。**每个框架的每一格都必须�
 | M12 | `默认不安全需自加` | 输出结构化需要自己配 structured output |
 | M13 | `默认不安全需自加` | 无内建注入防护、无工具权限分级 |
 | M14 | `框架已保证`（可配置） | 可通过 config 传 seed |
-| L2 | **`框架特有风险`** | 子图（subgraph）的上限需要**显式传递**；子图是否默认继承宿主的值直接决定 L2 预算下传是否生效。子图另有 checkpointer 继承模式：per-invocation（默认，每次调用全新状态）/ per-thread / stateless（`[官方文档确认]` use-subgraphs.md）。子图并发调用还有独立坑：官方警告 per-thread 子图被并行调用会产生 checkpoint 冲突，需用 `langchain.agents.middleware.ToolCallLimitMiddleware(tool_name=..., run_limit=1)` 防并行（同页）——纯 `StateGraph` 自建图没有这个中间件，得自己配模型禁用并行工具调用 |
+| L2 | **`框架特有风险`** | 子图（subgraph）的上限需要**显式传递**；子图是否默认继承宿主的值直接决定 L2 预算下传是否生效。子图另有 checkpointer 继承模式：per-invocation（默认，每次调用全新状态）/ per-thread / stateless（`[官方文档确认]` use-subgraphs.md）。子图并发调用还有独立坑：官方警告 per-thread 子图被并行调用会产生 checkpoint 冲突，需用 `langchain.agents.middleware.ToolCallLimitMiddleware(tool_name=..., run_limit=1)` 防并行（同页）——纯 `StateGraph` 自建图没有这个中间件，得自己配模型禁用并行工具调用。**`[自省实测]` 2026-09-08 两个关键默认值（langchain 1.3.9，本机实测签名）：① `StateGraph.add_node` 接受 `retry_policy` / `cache_policy` / `error_handler` / `timeout` / `defer` / `destinations`，但这些是「给了才生效」——图里没写就不存在，L8/M11 的护栏在纯自建图上完全靠手。② 更危险的是 `langchain.agents.factory` 在 `factory.py:1754` 硬编码 `config = {"recursion_limit": 9_999}`，注释指向 `langgraph-ai/langgraph#7313`：走 agent 工厂编译出来的图，递归上限被抬到 9999，M4 的 `GraphRecursionError` 在 9999 step 之内几乎不会触发。审计 L2/M1 时必须区分「框架有上限参数」与「这个图实际上限是多少」，后者要读调用链上的实际 config，不能读框架默认值 |
 | L5 | `框架已保证` | Checkpointer 是内建的，这是 LangGraph 的强项 |
 | L7 | `框架已保证`（有 interrupt 机制） | `from langgraph.types import interrupt` 可在节点内任意位置暂停；恢复用 `Command(resume=...)`，必须配 checkpointer + `config={"configurable": {"thread_id": ...}}`。**注意副作用**：官方明确「The node restarts from the beginning of the node where the interrupt() was called when resumed, so any code before the interrupt() runs again」——`interrupt()` 之前已执行的代码会重跑。把 `interrupt()` 放在写库/发消息之后 = L5/L6 的重复副作用。`[官方文档确认]` interrupts.md |
 
@@ -100,6 +101,40 @@ except Exception as e:
 > **不占独立矩阵。** `AgentExecutor` / `create_react_agent` 属于旧式 agent 抽象，loop 语义现在基本让位给 LangGraph。审计时写「继承 LangGraph 结论，除下列除外」即可，不要复制整张表。
 >
 > 唯一值得单列的例外：`AgentExecutor(max_iterations=15, max_execution_time=60)` 数的是 **agent 迭代**（一次模型调用 + 一次工具调用算一轮），换算比约 1:1，接近 ADK 的 iteration 语义，**不同于** LangGraph 的节点执行口径。这是历史上最容易混淆的一处：同一项目里 `AgentExecutor` 和 LangGraph 图混用时，两个 limiter 单位不同，L2 预算下传极易错。`[版本知识]`
+>
+> **`[自省实测]` 2026-09-08 langchain 1.3.9 中间件默认值（本机 `inspect.signature` 实测，非记忆）**——这三个默认是审计 LangChain 1.x agent 的第一现场：
+>
+> | 中间件 | 实测签名（关键字段） | 审计含义 |
+> |---|---|---|
+> | `ModelCallLimitMiddleware` | `(*, thread_limit=None, run_limit=None, exit_behavior='end')` | 两个 limit **默认都是 `None`**，即不启用；且 `exit_behavior` 默认 `'end'` 而不是 `'error'`——即使配了 limit，触限时是**静默正常收尾**，不是抛异常。M4 在「配了上限但走 `end`」的项目上等于没有可观测的超限信号 |
+> | `ToolCallLimitMiddleware` | `(*, tool_name=None, thread_limit=None, run_limit=None, exit_behavior='continue')` | 同上，limit 默认 `None`；`exit_behavior='continue'` 是**触限后继续跑**，比 `'end'` 更宽松。审计时要看的是「配了哪个值」，不是「有没有传这个中间件」 |
+> | `ModelRetryMiddleware` | `(*, max_retries=2, retry_on=(<class 'Exception'>,), on_failure='continue', backoff_factor=2.0, initial_delay=1.0, max_delay=60.0, jitter=True)` | 退避与 jitter 默认是**好**的；坏的是 `retry_on=(Exception,)`——字面意义上**重试所有异常**，程序 bug 也会被重试两次。正是 SKILL.md L8「默认值必须保守」判据的实例；`on_failure='continue'` 意味着重试耗尽后静默放过而不是失败 |
+>
+> **审计动作**：这三个中间件是「不传就等于没配」的形态，所以判 L2/M1 要问「项目里有没有实例化它们、传了什么值」，而不是「框架支不支持」。`grep -rI "ModelCallLimit\|ToolCallLimit\|ModelRetryMiddleware\|thread_limit\|run_limit" --include=*.py <项目>` 零命中就是零覆盖——但要注意 virtualenv 会命中自己，务必排除 `.venv*` / `site-packages`（`static-hints.py --exclude site-packages`）。
+
+### LangChain 自省
+
+```python
+import inspect
+import langchain
+print("langchain:", langchain.__version__)
+# 中间件默认值必须实测：上面表格里的每个默认都可能随版本变
+try:
+    from langchain.agents.middleware import (
+        ModelCallLimitMiddleware, ToolCallLimitMiddleware, ModelRetryMiddleware,
+    )
+    for cls in (ModelCallLimitMiddleware, ToolCallLimitMiddleware, ModelRetryMiddleware):
+        print(f"{cls.__name__}{inspect.signature(cls.__init__)}")
+except Exception as e:
+    print("middleware introspect failed:", e)
+# agent 工厂的递归上限：走工厂编译的图会被抬到近乎无界
+import langchain.agents.factory as _f
+import pathlib
+for i, line in enumerate(pathlib.Path(_f.__file__).read_text(
+        encoding="utf-8", errors="replace").splitlines(), 1):
+    if "recursion_limit" in line:
+        print(f"factory.py:{i}: {line.strip()}")
+```
 
 ---
 
@@ -585,3 +620,22 @@ print("exports:", [a for a in sorted(dir(<包名>)) if not a.startswith('_')])
 因此 smolagents 与 LlamaIndex 的证据走的是 `raw.githubusercontent.com` + `api.github.com` 直读上游源码——**这比读渲染后的文档站证据更强**（拿到了 file:line），但也意味着这些结论绑定的是核验当日的主分支，可能与你本机的发行版本不同。
 
 > 方法学注记：LangGraph 的官方文档站提供 `/llms.txt` 索引与逐页 Markdown，纯文本、无 HTML 噪声，是本轮最快的核验路径。其他框架的文档站需要先用 `sitemap.xml` 探路才能定位正确路径（本轮因路径错误各踩了 3 次 404）。**审计时对无法定位路径的文档站，应降级为读源码而不是凭记忆补全。**
+
+---
+
+## 自省记录（2026-09-08，第二轮）
+
+来源：审计 `deepseek_det2`（法拍/债权分析多 agent 系统，自研 loop + LangChain 1.3.9）时的本机 introspection。这一轮拿到的不是文档结论而是**运行环境的真实签名**，证据等级 `[自省实测]`——但绑定的版本是 `langchain 1.3.9`，不是通用结论。
+
+| 项 | 实测结果 | 对审计的影响 |
+|---|---|---|
+| `ModelCallLimitMiddleware` | `(*, thread_limit=None, run_limit=None, exit_behavior='end')` | 上限**默认不启用**，且触限行为默认**静默收尾** |
+| `ToolCallLimitMiddleware` | `(*, tool_name=None, thread_limit=None, run_limit=None, exit_behavior='continue')` | 触限后**继续跑**，比 `'end'` 更宽松 |
+| `ModelRetryMiddleware` | `retry_on=(<class 'Exception'>,)`，`max_retries=2`，`on_failure='continue'` | 字面重试所有异常；退避/jitter 默认良好 |
+| `StateGraph.add_node` | 接受 `retry_policy` / `cache_policy` / `error_handler` / `timeout` / `defer` / `destinations` | 全部「给了才生效」；纯自建图无默认护栏 |
+| `langgraph.errors.GraphRecursionError` | 可导入 | M4 对 LangGraph 是硬异常路径 |
+| `langchain.agents.factory:1754` | `config = {"recursion_limit": 9_999}`，注释指向 `langgraph-ai/langgraph#7313` | 走 agent 工厂编译的图，M4 的异常在 9999 step 内几乎不触发 |
+
+**这轮推翻了一处方法学错误，值得记下来**：第一轮核验结论是「LangGraph 有上限参数、超限硬抛异常」，据此判断 M1 属 `框架已保证`。但那个结论只看了框架默认值，没看实际调用链——agent 工厂把 `recursion_limit` 抬到 9999 之后，「框架有上限」在实践上等于「上限大到用不上」。**审计 M1/L2 时不能以框架默认值为证据，必须读调用链上实际生效的 config。** 这条已经写进 LangGraph L2 行与 LangChain 节。
+
+另有一次自省发现被证伪后回滚：最初把「`static-hints.py` 的 IGNORE 列表缺少 `.venv3` / `.venv312`」当成缺陷报出，实测 `iter_files` 的 `d.startswith(".")` 已拦住所有点前缀目录，该缺陷不存在——**报缺陷前先跑一遍验证，别把清单没写全当成清单不生效。**

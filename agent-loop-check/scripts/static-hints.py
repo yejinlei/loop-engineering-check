@@ -2,7 +2,12 @@
 """Agent loop 静态提示扫描器 — 只产生候选证据，不做判定。
 
 用法:
-    python static-hints.py <目标目录> [--format json|text] [--max-file-kb 512]
+    python static-hints.py <目标目录或单个文件> [--format json|text]
+                           [--max-file-kb 512] [--exclude <名字或前缀> ...]
+
+--exclude 可重复，按目录名或文件名前缀匹配，从根开始裁剪——所以排除 site-packages
+这类子目录会拦住它下面所有层级：
+    python static-hints.py ./proj --exclude site-packages --exclude .mypy_cache
 
 设计原则:
   1. 只读。不 import 目标项目的任何模块，只用 ast 静态解析 + 正则。
@@ -30,7 +35,10 @@ SKIP_DIRS = {
     ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
     "env", ".env", ".tox", ".nox", ".mypy_cache", ".ruff_cache", ".pytest_cache",
     "dist", "build", "out", "site-packages", ".egg-info", "coverage",
+    "venv3", "envs", "virtualenv", "__pypackages__",
 }
+# 以点开头的目录名一律不扫——.venv3 / .venv312 / .conda 这类版本化虚拟环境
+# 不需要逐个列名，startswith 已经拦住。
 PY_SUFFIXES = {".py"}
 JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 
@@ -93,6 +101,8 @@ class Hint:
 @dataclass
 class ScanResult:
     scanned_files: int = 0
+    skipped_files: int = 0
+    skipped_reasons: dict = field(default_factory=dict)
     errors: list = field(default_factory=list)
     framework_imports: dict = field(default_factory=dict)
     raw_llm_clients: dict = field(default_factory=dict)
@@ -153,12 +163,65 @@ def emit(text: str) -> None:
         print(text.encode(enc, "replace").decode(enc, "replace"))
 
 
+# 当前正在扫描的源文件行表。scan_python 入口调用 prime_lines 重置。
+# _CURRENT 记下这行表属于哪份源码：source_segment 收到不同的 source 时自动重建，
+# 而不是静默返回上一个文件的数据。
+_LINES: list = []
+_LINE_BYTES: list = []
+_TOTAL = 0
+_CURRENT: str = ""
+# 只认 \r / \n 的行尾，且换符留在上一行的末尾。
+_LINE_END = re.compile(r"\r\n|\r|\n")
+
+
+def _split_source_lines(source: str) -> list:
+    """按 \\r\\n / \\r / \\n 切行并保留行尾换符，对齐 CPython 的 ast._splitlines_no_ff。
+
+    刻意不用 str.splitlines：它的分隔符集合比解析器宽（\\f \\v U+0085 U+2028
+    U+2029 也算），且不带换符，切出来和解析器看到的行对不上。
+    """
+    if not source:
+        return []
+    # 按每个换行的结束位置切分：换符归上一行。别改成 re.split 或 (?<=...) 后顾断言——
+    # 前者会丢掉换符，后者把换符留到下一行并把 CRLF 切成两刀。
+    lines = []
+    start = 0
+    for m in _LINE_END.finditer(source):
+        lines.append(source[start:m.end()])
+        start = m.end()
+    lines.append(source[start:])
+    return lines
+
+
+def prime_lines(source: str) -> None:
+    global _LINES, _LINE_BYTES, _TOTAL, _CURRENT
+    _LINES = _split_source_lines(source)
+    # col_offset 是字节偏移，所以每行的 UTF-8 字节也必须预先备好
+    _LINE_BYTES = [ln.encode() for ln in _LINES]
+    _TOTAL = len(_LINES)
+    _CURRENT = source
+
+
 def source_segment(source: str, node: ast.AST) -> str:
-    try:
-        seg = ast.get_source_segment(source, node)
-        return " ".join(seg.split()) if seg else ""
-    except Exception:
+    """按 lineno/col_offset 从缓存行表切源码，返回节点原文（保留换行）。
+
+    不用 ast.get_source_segment：它每次调用都重新切行整个文件，7000 个节点就是
+    7000 次全文切分，实测单文件要跑数十秒，而 ast.parse 只要 0.1s。按行缓存后
+    单次是常数时间。索引口径照抄 CPython：行号先减一，再用 [col:end_col] 截断。
+    """
+    if source is not _CURRENT:
+        prime_lines(source)
+    a = node.lineno - 1 if getattr(node, "lineno", None) else -1
+    b = node.end_lineno - 1 if getattr(node, "end_lineno", None) else -1
+    if a < 0 or b < 0 or a >= _TOTAL or b >= _TOTAL or b < a:
         return ""
+    col = node.col_offset or 0
+    ecol = node.end_col_offset
+    if b == a:
+        return _LINE_BYTES[a][col:ecol].decode()
+    first = _LINE_BYTES[a][col:].decode()
+    last = _LINE_BYTES[b][:ecol].decode()
+    return first + "".join(_LINES[a + 1:b]) + last
 
 
 def header_text(source: str, node: ast.AST) -> str:
@@ -217,6 +280,7 @@ def dynamic_dispatch(node: ast.AST) -> bool:
 
 
 def scan_python(path: Path, source: str, root: Path, result: ScanResult):
+    prime_lines(source)
     rel_path = rel(path, root)
     try:
         tree = ast.parse(source, filename=str(path))
@@ -339,13 +403,25 @@ def scan_js(path: Path, source: str, root: Path, result: ScanResult):
             result.note_limiter(m.group(0), rel_path, lineno)
 
 
-def iter_files(root: Path, max_kb: int):
+def _hit(names, value: str) -> bool:
+    """value 是否以某个 name 开头——按目录名或文件名做前缀匹配。"""
+    return any(value.startswith(n) for n in names) if names else False
+
+
+def iter_files(root: Path, max_kb: int, excludes=()):
+    """产出 (路径, 后缀)。跳过的文件不产出，但由 main 侧统计原因。
+
+    目录裁剪从根开始（os.walk 原地改 dirnames），所以排除 site-packages
+    会拦住它下面所有层级；排除单个文件则需要精确到文件名。
+    """
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+        dirnames[:] = [d for d in dirnames if not _is_pruned_dir(d, excludes)]
         for fn in filenames:
             p = Path(dirpath) / fn
             suffix = p.suffix.lower()
             if suffix not in PY_SUFFIXES and suffix not in JS_SUFFIXES:
+                continue
+            if _hit(excludes, fn):
                 continue
             try:
                 if p.stat().st_size > max_kb * 1024:
@@ -355,22 +431,97 @@ def iter_files(root: Path, max_kb: int):
             yield p, suffix
 
 
+def _is_pruned_dir(name: str, excludes=()) -> bool:
+    """目录名是否被裁剪。iter_files 与 count_skipped 共用这一条规则，
+    保证「扫描到」与「跳过」的口径一致。"""
+    return name in SKIP_DIRS or name.startswith(".") or _hit(excludes, name)
+
+
+def count_skipped(root: Path, max_kb: int, candidates, excludes=()):
+    """统计跳过了哪些文件及原因。
+
+    跳过是常见操作，必须可观测——否则读者会把「扫描到 N 个文件」
+    误当成「项目里只有 N 个文件」。这里不裁剪目录地再走一遍，
+    才能数出被裁剪目录内部的文件。
+
+    两处刻意不做的事：不对每个文件调 Path.resolve()（一次调用要碰
+    一次文件系统，12 万个文件实测要跑一分多钟），也不对每个文件重走
+    一遍祖先链。比较用 as_posix() 字符串——两次遍历从同一个已解析的
+    root 出发，路径字符串天然一致；「是否在裁剪目录内」改成按目录
+    增量继承，os.walk 自顶向下保证父目录先产出。
+    """
+    scanned = {p.as_posix() for p, _ in candidates}
+    counts = {"inside_skipped_dir": 0, "excluded": 0, "oversize": 0, "unreadable": 0}
+    root_s = str(root)
+    # 每个目录是否「自身或其祖先被裁剪」。root 本身不算裁剪——我们就是要从它往下走。
+    inside_pruned = {}
+    for dirpath, _dirnames, filenames in os.walk(root):
+        parent = os.path.dirname(dirpath)
+        is_root = dirpath == root_s
+        own = (not is_root) and _is_pruned_dir(os.path.basename(dirpath), excludes)
+        # os.walk 不跟进符号链接目录，所以这里不需要任何解析就能继承父目录的结论
+        pruned = own or inside_pruned.get(parent, False)
+        inside_pruned[dirpath] = pruned
+        for fn in filenames:
+            p = Path(dirpath) / fn
+            suffix = p.suffix.lower()
+            if suffix not in PY_SUFFIXES and suffix not in JS_SUFFIXES:
+                continue
+            try:
+                if p.as_posix() in scanned:
+                    continue
+            except OSError:
+                counts["unreadable"] += 1
+                continue
+            if pruned:
+                why = "inside_skipped_dir"
+            elif _hit(excludes, fn):
+                why = "excluded"
+            else:
+                try:
+                    if p.stat().st_size > max_kb * 1024:
+                        why = "oversize"
+                    else:
+                        why = "unreadable"
+                except OSError:
+                    why = "unreadable"
+            counts[why] += 1
+    counts = {k: v for k, v in counts.items() if v}
+    if counts:
+        counts["total"] = sum(v for k, v in counts.items() if k != "total")
+    return counts
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Agent loop 静态提示扫描（只读，产出候选证据）")
-    ap.add_argument("target", help="要扫描的目录")
+    ap.add_argument("target", help="要扫描的目录或单个源文件")
     ap.add_argument("--format", choices=["json", "text"], default="json")
     ap.add_argument("--max-file-kb", type=int, default=512)
+    ap.add_argument("--exclude", action="append", default=[],
+                    help="按目录名/文件名前缀排除，可重复（如 --exclude site-packages）")
     args = ap.parse_args(argv)
 
     setup_stdout()
 
-    root = Path(args.target).resolve()
-    if not root.is_dir():
-        emit(json.dumps({"error": f"not a directory: {args.target}"}, ensure_ascii=False))
+    target = Path(args.target).expanduser()
+    if not target.exists():
+        emit(json.dumps({"error": f"not found: {args.target}"}, ensure_ascii=False))
         return 2
 
+    excludes = tuple(args.exclude or [])
+    # 单文件输入时，用它的父目录做根，保证 rel() 输出有意义的相对路径
+    root = target if target.is_dir() else target.parent.resolve()
+    if target.is_file() and _hit(excludes, target.name):
+        emit(json.dumps({"error": f"excluded by --exclude: {target.name}"}, ensure_ascii=False))
+        return 2
+
+    if target.is_dir():
+        candidates = list(iter_files(target.resolve(), args.max_file_kb, excludes))
+    else:
+        candidates = [(target.resolve(), target.suffix.lower())]
+
     result = ScanResult()
-    for p, suffix in iter_files(root, args.max_file_kb):
+    for p, suffix in candidates:
         result.scanned_files += 1
         try:
             source = p.read_text(encoding="utf-8", errors="replace")
@@ -382,6 +533,12 @@ def main(argv=None) -> int:
         else:
             scan_js(p, source, root, result)
 
+    if target.is_dir():
+        result.skipped_reasons = count_skipped(
+            target.resolve(), args.max_file_kb, candidates, excludes)
+        result.skipped_files = result.skipped_reasons.get("total", 0)
+        result.skipped_reasons.pop("total", None)
+
     if args.format == "json":
         d = asdict(result)
         d.pop("_fw_seen", None)
@@ -390,7 +547,9 @@ def main(argv=None) -> int:
     else:
         fw = {k: len(v) for k, v in result.framework_imports.items()}
         cl = {k: len(v) for k, v in result.raw_llm_clients.items()}
-        emit(f"scanned_files={result.scanned_files} errors={len(result.errors)}")
+        emit(f"scanned_files={result.scanned_files} skipped={result.skipped_files} errors={len(result.errors)}")
+        if result.skipped_reasons:
+            emit(f"skipped_reasons={result.skipped_reasons}")
         emit(f"framework_imports={fw}")
         emit(f"raw_llm_clients={cl}")
         emit(f"limiter_mentions={len(result.limiter_mentions)}")
