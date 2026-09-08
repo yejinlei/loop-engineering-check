@@ -1,3 +1,10 @@
 # transient caches from fetching upstream sources during verification
 _fetch_tmp/
 *.tmp
+
+# python build artifacts — must not be committed into the skill body
+__pycache__/
+*.pyc
+
+# audit outputs are written next to the audited project, never into the skill
+audits/

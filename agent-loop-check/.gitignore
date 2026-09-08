@@ -1,3 +1,0 @@
-# transient caches from fetching upstream sources during verification
-_fetch_tmp/
-*.tmp
