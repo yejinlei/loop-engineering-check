@@ -2,19 +2,19 @@
 
 本文件是 `SKILL.md` 不变式表的**正向面对**：不变式表回答「缺什么会怎样」，本文件回答「做得好的长什么样、怎么搬过去」。
 
-做法来自**五个真实案例**，全部锚点均为 `[源码确认]`，核验日期 **2026-09-07**（案例 1–2）与 **2026-09-08**（案例 3–5）。没有一条是设计意图推测。
+做法来自**六个真实案例**，全部锚点均为 `[源码确认]`，核验日期 **2026-09-07**（案例 1–2）与 **2026-09-08**（案例 3–6）。没有一条是设计意图推测。
 
-| | 案例 1 · 自研 BSP 波次编排引擎 | 案例 2 · deepseek-harness | 案例 3 · pi | 案例 4 · OpenHarness | 案例 5 · harness/harness |
-|---|---|---|---|---|---|
-| 定位 | 匿名（按用户要求脱敏）的本地教学代码库 | [公开仓库](https://github.com/deepseek-ai/deepseek-harness)，TypeScript，Cordis 插件框架 | [公开仓库](https://github.com/earendil-works/pi)，TypeScript，通用 agent 运行时 | [公开仓库](https://github.com/HKUDS/OpenHarness)，Python，agent 运行时 | [公开仓库](https://github.com/harness/harness)，Go，**非 LLM** 的 CI/CD 平台 |
-| 产出 | 模式 1–17：11 条做法 + 6 条缺陷反例 | 模式 18–23：6 条做法；模式 24：3 条反例合集 | 模式 25–31：7 条做法 | 模式 32–34：3 条做法；模式 35：3 条反例（含 1 条正例） | 模式 36–39：4 条做法；模式 40：1 条反例 |
-| 强项 | 状态合并规则、循环终态区分、审批分层 | 重试退避、配置不变量、事件持久化 | 流式完整性、批终止语义、恢复与清理 | 终态可区分、预算记账、非对称钳制 | 领域泛化证据、唤醒兜底、终态编码 |
+| | 案例 1 · 自研 BSP 波次编排引擎 | 案例 2 · deepseek-harness | 案例 3 · pi | 案例 4 · OpenHarness | 案例 5 · harness/harness | 案例 6 · hermes-agent |
+|---|---|---|---|---|---|---|
+| 定位 | 匿名（按用户要求脱敏）的本地教学代码库 | [公开仓库](https://github.com/deepseek-ai/deepseek-harness)，TypeScript，Cordis 插件框架 | [公开仓库](https://github.com/earendil-works/pi)，TypeScript，通用 agent 运行时 | [公开仓库](https://github.com/HKUDS/OpenHarness)，Python，agent 运行时 | [公开仓库](https://github.com/harness/harness)，Go，**非 LLM** 的 CI/CD 平台 | [公开仓库](https://github.com/NousResearch/hermes-agent)，Python，面向终端用户的完整 agent 产品（CLI / TUI / desktop / API server） |
+| 产出 | 模式 1–17：11 条做法 + 6 条缺陷反例 | 模式 18–23：6 条做法；模式 24：3 条反例合集 | 模式 25–31：7 条做法 | 模式 32–34：3 条做法；模式 35：3 条反例（含 1 条正例） | 模式 36–39：4 条做法；模式 40：1 条反例 | 模式 41–51：11 条做法；模式 52–54：3 条反例 |
+| 强项 | 状态合并规则、循环终态区分、审批分层 | 重试退避、配置不变量、事件持久化 | 流式完整性、批终止语义、恢复与清理 | 终态可区分、预算记账、非对称钳制 | 领域泛化证据、唤醒兜底、终态编码 | 多运行模式下的护栏分层、成本×次数交叉、配置解析拒绝翻转值 |
 
-五个案例互补而非互证：案例 1 在状态与循环控制上最扎实，但在预算与重试上全空；案例 2 在预算与重试上最扎实，却**自文档化**了「无内建轮次预算」；案例 3 在流式完整性与恢复语义上最扎实，是全库唯一把「为什么」写进注释的项目；案例 4 给出了 L1「三条终态」里缺失的那一条（无上限退出）；案例 5 **不是 LLM 项目**，它证明了这组不变式是调度类系统的通用属性，不是 LLM 特有。
+六个案例互补而非互证：案例 1 在状态与循环控制上最扎实，但在预算与重试上全空；案例 2 在预算与重试上最扎实，却**自文档化**了「无内建轮次预算」；案例 3 在流式完整性与恢复语义上最扎实，是全库唯一把「为什么」写进注释的项目；案例 4 给出了 L1「三条终态」里缺失的那一条（无上限退出）；案例 5 **不是 LLM 项目**，它证明了这组不变式是调度类系统的通用属性，不是 LLM 特有；案例 6 是终端 agent 产品，多数锚点是「同一套不变式在不同运行模式下的分层」，而不是新做法。
 
 **「没有内建预算」不是批评，是设计选择**——它写在 Known Limitations 里，所以是反例（可参照的边界），不是缺陷指控。
 
-**引法有两条，要求不同：** 引「做法」可以直接迁移，不需要版本确认；引「行号」要先确认目标项目是否同一版本——案例 1 是小型教学代码库，案例 2–5 都是活跃迭代的上游主分支（`master` / `main`），行号都会在迭代中漂移。
+**引法有两条，要求不同：** 引「做法」可以直接迁移，不需要版本确认；引「行号」要先确认目标项目是否同一版本——案例 1 是小型教学代码库，案例 2–6 都是活跃迭代的上游主分支（`master` / `main`），行号都会在迭代中漂移。
 
 ## 0. 总纲：把错误变成不可表达，而不是写成检查
 
@@ -1085,50 +1085,538 @@ if err != nil {
 
 ---
 
+## 案例 6 · hermes-agent（NousResearch/hermes-agent，2026-09-08 上游 `main` 源码核验）
+
+**核验范围：** 取回 18 个文件（`agent/conversation_loop.py`、`agent/turn_recovery.py`、`agent/moa_loop.py`、`agent/turn_overflow.py`、`agent/turn_truncation.py`、`agent/turn_tool_validation.py`、`agent/turn_stop_gates.py`、`agent/tool_guardrails.py`、`agent/empty_response_guard.py`、`hermes_cli/checkpoints.py`、`agent/turn_liveness.py`、`agent/turn_retry_state.py`、`agent/repetition_guard.py`、`agent/model_cost_guard.py`、`agent/periodic_scheduler.py`、`agent/turn_preflight_gate.py`、`agent/iteration_budget.py`、`tools/retry_utils.py`）。3 个大文件（`conversation_loop.py` 82KB、`turn_recovery.py` 76KB、`moa_loop.py` 74KB）只做头部通读 + 定向检索，未逐行读完——**引行号前先确认版本**。
+
+**与案例 3–5 的区别：** 案例 3、4 是 LLM agent 框架/引擎，案例 5 是非 LLM 的调度系统。案例 6 是**面向终端用户的完整 agent 产品**（CLI/TUI/desktop/API server 多平台），它带的是「一个产品要同时满足交互体验和无人值守安全」这一层约束——这条约束在案例 3–5 里都没出现，所以本案例多数锚点是「同一套不变式在不同运行模式下的分层」，而不是「这条不变式的新做法」。
+
+**证据等级：** 全部 `[源码确认]`，绑定 2026-09-08 快照。全部是项目自身的实现，不涉及第三方框架 API 名。
+
+---
+
+### 模式 41 · 重试预算要乘上单次尝试成本
+
+**服务的不变式：** M1
+
+**证据：** `agent/empty_response_guard.py`
+
+```python
+DEFAULT_EMPTY_RETRY_BUDGET = 3
+REDUCED_EMPTY_RETRY_BUDGET = 1
+DEFAULT_COST_THRESHOLD_USD = Decimal("0.25")
+
+def empty_retry_budget(agent: Any, response: Any) -> int:
+    """Empty-retry budget for the current streak (3, or 1 when a single attempt is
+    estimated to cost more than the configured threshold)."""
+    if not guard_enabled(agent):
+        return DEFAULT_EMPTY_RETRY_BUDGET
+    cost = _estimate_attempt_cost(agent, response)
+    if cost is not None and cost >= _cost_threshold_usd(agent):
+        return REDUCED_EMPTY_RETRY_BUDGET
+    return DEFAULT_EMPTY_RETRY_BUDGET
+```
+
+预算是「次数」，单次尝试成本是「价格」，两者相乘才是花费。固定 3 次重试在单次成本 $0.001 时合理，在单次成本 $1 时是烧 $3 换同样一个结果。此前只有「要有成本上限」（M1）和「分类可替换」（L8），没有把「重试预算」和「单次成本」显式连起来的写法。
+
+**可迁移的判据：** 预算收缩要落到具体数字——阈值、N、M 三个数都要能引出来（`$0.25`、`3`、`1`）。审计不要只问「有没有成本上限」，要问「成本维度影响了哪些预算」；影响到了，判 `OK` 的前提是收缩方向与幅度都能反查。
+
+**同时注意失败方向：** `cost is not None and cost >= threshold` —— 成本未知（`None`）时预算不动，走默认 3 次。这是**保守方向的 fail-open**：宁可能在未知成本下多试两次，也不因定价数据缺失把重试掐掉。方向本身就是判据，见 M13 第四条。
+
+**迁移要点：** 判 M1 时问：预算收缩条件里的「未知」走哪一档？「未知就走默认预算」合法，但要写出来；「未知就走最严」会让定价服务故障变成 agent 功能退化。
+
+---
+
+### 模式 42 · 确定性检测要拒绝混合证据，签名要覆盖 provider 维度
+
+**服务的不变式：** M11、M7
+
+**证据：** `agent/empty_response_guard.py`
+
+```python
+@dataclass(frozen=True)
+class EmptyAttempt:
+    model: str
+    provider: str
+    finish_reason: str
+    usage_present: bool
+    zero_output: bool
+    observed_generation: bool
+
+    @property
+    def signature(self) -> tuple:
+        return (self.model, self.provider, self.finish_reason)
+
+def deterministic_empty(agent: Any) -> bool:
+    """...Requires >= 2 consecutive attempts with an identical
+    (model, provider, finish_reason) signature. Usage-backed attempts must all
+    prove zero output. Usage-absent attempts must all have no observed content
+    or reasoning. Mixed evidence fails open so ambiguous transients keep their
+    retries."""
+    ...
+    same_signature = all(a.signature == first.signature for a in attempts)
+    usage_proves_empty = all(a.usage_present and a.zero_output for a in attempts)
+    response_proves_empty = all(
+        not a.usage_present and not a.observed_generation for a in attempts
+    )
+    return same_signature and (usage_proves_empty or response_proves_empty)
+```
+
+两件事绑在一起：
+
+1. **签名包含 provider**——同一个 `model` 名经不同 provider（直连 / 代理 / 网关）时，`finish_reason` 语义可能不同；签名不含 provider 会把「同一模型的两种失败」误判成「同一失败」。
+2. **混合证据 fail open**——两次空响应一次有 usage 一次没有、或一次有 reasoning token 一次没有，`deterministic_empty` 返回 `False`，保留重试。方向是刻意的：把瞬态误判成确定性会让「本来能重试成功」的回合直接跳去 fallback 链，代价比多试一次大得多。
+
+**可迁移的判据：** 做「确定性」判定（确定性失败、幂等、可重试）时，签名要覆盖**能改变语义的所有维度**，不只是「模型名」；判定条件是 `all` 不是 `any`，混合证据意味着你其实不知道发生了什么，此时保守选择是保留原行为。
+
+**迁移要点：** 审计 M11 时问：签名里少了哪个维度？「模型名 + finish_reason」在直连场景够用，多 provider 场景会错分；`any` 判定的形态要把每次判定记出来，让「证据不一致」可观测，而不是被 `any` 静默吞掉。
+
+---
+
+### 模式 43 · 状态清零要由消费方负责，而不是由记录方
+
+**服务的不变式：** M9、M10
+
+**证据：** `agent/empty_response_guard.py`
+
+```python
+# Agent-object attribute names. State is scoped to one consecutive empty streak: cleared
+# whenever ``_empty_content_retries == 0`` at record time, so every existing counter-reset
+# site (turn start, compaction, tool success, fallback activation) is honoured.
+_ATTEMPTS_ATTR = "_empty_attempt_history"
+
+def record_empty_attempt(...):
+    """Record one empty completion in the current streak.
+
+    Call BEFORE ``_empty_content_retries`` is incremented: a counter of 0 marks a new
+    streak and clears prior history."""
+    attempts = _attempts(agent)
+    if getattr(agent, "_empty_content_retries", 0) == 0:
+        attempts.clear()
+        setattr(agent, _STREAK_COST_ATTR, Decimal("0"))
+```
+
+「streak」的生命周期不该由记录方自己判断——turn start、compaction、tool success、fallback activation 四个位置都会重置计数器，记录方不需要知道它们的顺序，只需在记录时读一次「计数器是不是 0」。这把「谁负责清理」这个通常要维护成清单的约束，换成了**单一判据点**。
+
+注释里还有更细的时序约束：`Call BEFORE _empty_content_retries is incremented`——先记录、再递增，才能让「0」区分「新 streak」和「streak 内的第二次」。反过来递增再记录，新 streak 的第一次记录会被判成「计数器非 0」，历史不清，跨 streak 的失败会被当成同一个 streak 的连续失败，直接跳过重试。
+
+**可迁移的判据：** 状态作用域的清理责任要么集中在一处（有清单可维护），要么换成消费方读一次即可判的单一判据。前者要维护「新增了 reset 点、清清单了吗」；后者把维护义务从「记清单」变成「改判据」，判据形态更稳。
+
+**迁移要点：** 审计 M9 时问：状态的清零由谁负责？一处一处清的，逐个位置确认，漏一处不清就是 `GAP`；消费方按单一判据清的，判据本身可判。
+
+---
+
+### 模式 44 · 重试上限与退避表必须一起算，算式要写出循环退出顺序
+
+**服务的不变式：** L8
+
+**证据：** `tools/retry_utils.py`
+
+```python
+_ZAI_CODING_OVERLOAD_LONG_BACKOFF = (30.0, 60.0, 90.0, 120.0)
+_ZAI_CODING_OVERLOAD_SHORT_ATTEMPTS = 3
+# The short count is shared by ``adaptive_rate_limit_backoff`` and
+# ``zai_coding_overload_retry_ceiling`` so the two cannot silently desync.
+
+def zai_coding_overload_retry_ceiling(short_attempts: int = _ZAI_CODING_OVERLOAD_SHORT_ATTEMPTS) -> int:
+    """Retry-loop ceiling for the full Z.AI overload schedule: one past the last long entry,
+    because the loop gives up when ``retry_count >= ceiling`` BEFORE computing the attempt's
+    backoff (the default ``api_max_retries`` of 3 equals ``short_attempts``)."""
+    return short_attempts + len(_ZAI_CODING_OVERLOAD_LONG_BACKOFF) + 1
+```
+
+三个细节：
+
+- **+1 不是安全余量，是循环退出顺序的推论**：循环在计算本次退避**之前**判断放弃，上限等于表长时最后一档退避永远不执行。审计重试表要看上限能不能取到表里每一档。
+- **共用常量**：`_ZAI_CODING_OVERLOAD_SHORT_ATTEMPTS` 同时被退避函数和上限函数消费，注释写「so the two cannot silently desync」——同一个数字写在两处，改一处忘改另一处不报错，只会让退避表和上限永久不一致。
+- **分类器是窄的**：`is_zai_coding_overload_error` 要求 status 429 + 精确 base_url 片段 + 精确 model 名 + 错误文本含 `1305` 或 `temporarily overloaded`，四条件同时满足才走加长退避。普通 429 走常规路径、快速失败。分类器越窄误匹配代价越小；宽分类器加宽退避等于把「限流」当成「暂时过载」，让所有 429 都等 30–120s。
+
+**可迁移的判据：** 退避表和上限要能算出来；共用常量要单一来源；分类器要窄到能引用出全部判定条件。
+
+**迁移要点：** 判 L8 时不要只看「有没有上限」，要拿一个已完成的真实重试序列，数循环里用了哪几档退避；表尾档位从未出现，就是上限少算了 1（或循环退出顺序和注释不一致）。
+
+---
+
+### 模式 45 · jitter 的随机源要额外去相关，防粗时钟把并发重试重新同步
+
+**服务的不变式：** L8
+
+**证据：** `tools/retry_utils.py`
+
+```python
+# Monotonic counter for jitter-seed uniqueness within a process; locked
+# because concurrent gateway sessions retry simultaneously.
+_jitter_counter = 0
+_jitter_lock = threading.Lock()
+
+def jittered_backoff(attempt, *, base_delay=5.0, max_delay=120.0, jitter_ratio=0.5):
+    global _jitter_counter
+    with _jitter_lock:
+        _jitter_counter += 1
+        tick = _jitter_counter
+
+    exponent = max(0, attempt - 1)
+    delay = max_delay if (exponent >= 63 or base_delay <= 0) else min(base_delay * (2 ** exponent), max_delay)
+
+    # Seed from time + counter so coarse clocks still decorrelate.
+    seed = (time.time_ns() ^ (tick * 0x9E3779B9)) & 0xFFFFFFFF
+    return delay + random.Random(seed).uniform(0, jitter_ratio * delay)
+```
+
+两处反直觉的防御：
+
+- **指数防溢出**：`exponent >= 63 or base_delay <= 0` 时直接返回 `max_delay`，不让 `2 ** exponent` 算到天文数字。防的是「jitter 之后再乘系数」把封顶值放大的路径——如果先算 `2 ** 63` 再 `min(..., max_delay)`，中间值已超界，某些运行时行为不同。
+- **种子不只是时间戳**：并发会话在同一纳秒内会拿到相同种子，纯时间戳种子会把 thundering herd 完整重新造出来。加锁单调计数器是**进程内**的去相关手段——防「同进程内并发会话」，不防「跨进程」，跨进程仍靠时间戳粒度。
+
+注释「so coarse clocks still decorrelate」说的是：在时钟粒度只有毫秒（甚至秒）的运行时上，时间戳种子基本无效，必须额外注入单调量。
+
+**可迁移的判据：** jitter 的随机源在两个前提下要额外处理：(1) 并发会话可能同时重试；(2) 运行时时钟粒度不足以区分它们。任一成立，纯时间戳种子退化。
+
+**迁移要点：** 审计 L8 的 jitter 时问：**这个进程里可能同时有几个会话在重试？** 答「只有 1 个」可直接用时间戳；答「多个」要看种子构造，纯时间戳就是 `RISK`。
+
+---
+
+### 模式 46 · 配置解析器要主动拒绝会翻转控制流方向的值
+
+**服务的不变式：** X5、M1
+
+**证据：** `agent/turn_liveness.py`
+
+```python
+def _resolve_finite_seconds(raw: Any, *, default: float, key: str) -> float:
+    """Coerce one duration knob, rejecting typos, NaN and Inf (never raises).
+
+    NaN would silently disable the timeout via the ``> 0`` comparison and
+    Inf would freeze the poll loop in ``Event.wait``.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = math.nan
+    if not math.isfinite(value):
+        _warn_invalid_value(key, raw, default)
+        return default
+    return value
+```
+
+NaN 与 Inf 都在「合法浮点数」范围内，纯范围校验抓不到，但破坏方式是**改变比较与等待的语义**——NaN 让所有比较返回 `False`（守卫不触发），Inf 让 `Event.wait(Inf)` 变永久等待。这两个失效模式不是「数值变大」，是「守卫方向翻转」。
+
+同类形态还有一处在 `agent/empty_response_guard.py`：
+
+```python
+enabled = section.get("enabled", DEFAULT_GUARD_ENABLED)
+if isinstance(enabled, str):  # YAML quoting can turn true/false into strings.
+    enabled = enabled.strip().lower() not in ("0", "false", "no", "off")
+elif not isinstance(enabled, bool):
+    enabled = DEFAULT_GUARD_ENABLED
+```
+
+YAML 引号会把 `false` 变成字符串 `"false"`，此时 `bool("false")` 是 `True`——不加这段处理，**「关掉的护栏」会被读成「开着的护栏」**。这档比 NaN 更常见，不需要用户主动写 NaN，只要用了引号。
+
+**可迁移的判据：** 数字配置的失效清单分两半——**越界那半边**（越大、越小、负数、零）和**翻转那半边**（NaN、Inf、`null`、空串、类型错位）。翻转类值不报错、不产生日志，只让守卫安静地不再生效，形态上和「配错了 key 静默回落默认值」同源。审计把两半分开问，两半都要有清单。
+
+**迁移要点：** 判 X5 时问：**哪些配置值会让守卫从「在防」变成「没在防」，而不是让守卫更严？** 答不上来的项目只覆盖一半。解析器对引号敏感的类型（bool、enum）必须自己处理字符串回落。
+
+---
+
+### 模式 47 · 观察型报告与已提交报告要分成两次发布，措辞要匹配
+
+**服务的不变式：** L6、L5
+
+**证据：** `agent/turn_liveness.py`
+
+```python
+def _tick(self):
+    ...
+    if snapshot.idle_seconds < self._timeout_s:
+        return None
+    # Pre-commit surface is OBSERVATIONAL only: it reports the stall and that a recovery attempt is
+    # beginning. It must not claim the abort or the lease withdrawal has committed — the next operation
+    # can still veto the outcome. The definitive aborted/lease-stopped settlement is published by
+    # _surface_committed_abort only after _commit_abort succeeds and the turn is deactivated (#95663
+    # review).
+    self._surface_stall(snapshot)
+    message = f"Turn made no progress for {int(snapshot.idle_seconds)}s; aborting to release the session."
+    if not self._commit_abort(snapshot, message):
+        return None
+    # Stop renewing the lease so a wedge the interrupt cannot unwind expires via TTL.
+    self._deactivate_turn()
+    self._surface_committed_abort(snapshot)
+    return False
+```
+
+```python
+def _surface_committed_abort(self, snapshot: ActivitySnapshot) -> None:
+    """Publish the definitive settlement once the abort has authority.
+
+    Runs only once ``_commit_abort`` succeeded (the interrupt was published) and the turn lease was
+    deactivated: the turn IS force-aborted and lease renewal IS stopped, so stating that is now true.
+    Separated from the pre-commit surface so a declined abort never reports a committed outcome (#95663
+    review).
+    """
+```
+
+两段发布的措辞完全不同：pre-commit 只说「检测到停滞，正在尝试恢复」，committed 才说「已被中止，租约已停止更新」。中间存在**被否决**这条路径（`_commit_abort` 返回 `False`，说明有进展、watchdog 判定被推翻），此时如果 pre-commit 已报告「已中止」，用户看到的状态就比实际状态超前。
+
+**可迁移的判据：** 任何「报告 → 操作 → 可能有另一个操作否决」的形态，报告要分两次发。判据问：**报告里承诺的结论，是不是在发这条报告时就已经不可撤销了？** 答「不是」就要拆成两次。
+
+**迁移要点：** 审计 L6 时把「终态要能区分」扩展到用户可见的报告面——L6 原有判据针对数据字段（下游读到什么），这里是同一原则在日志/通知/UI 上。报告超前实际状态，是 L6 的另一种形态：不是数据不一致，是**用户以为数据一致**。
+
+---
+
+### 模式 48 · 删除授权要绑定到确认时看到的那一批身份
+
+**服务的不变式：** L5、M13
+
+**证据：** `hermes_cli/checkpoints.py`（`hermes checkpoints prune`）
+
+```python
+# Bind deletion to exactly what was displayed/confirmed: a project that goes orphan
+# only *after* the preview (workdir vanishes while waiting on input()) must not be
+# swept up. Set unconditionally for every non-force run — an EMPTY preview binds an
+# EMPTY allowlist, so it can never authorize orphans found by the later rescan.
+orphan_allowlist = {p["hash"] for p in orphans}
+orphan_allowlist.update(p["path"] for p in pre_v2_orphans)
+```
+
+确认提示里把「不可达」的两义性直接写出来：
+
+```python
+print("A workdir can be unreachable because the project was deleted,")
+print("or because an external volume / network share / VPN is down.")
+print("Pass --keep-orphans to prune stale entries only.")
+```
+
+三个细节：
+
+- **allowlist 无条件设置**——注释明确写「an EMPTY preview binds an EMPTY allowlist」。如果只在「有 orphan 时」设置，「预览时没有、确认时有」这条路径就绕过绑定；这条路径正是 TOCTOU 的入口。
+- **`--keep-orphans` 走窄路径**——只删 stale，不碰 orphan。这把「网络故障 = 批量删除」这条路径关掉了。
+- **两义性写在提示里**——用户看到 `workdir` 不可达时，代码直接告诉他可能是 VPN 断了，而不是让他在 `prune` 这个词上猜。
+
+**可迁移的判据：** 破坏性操作前的确认预览，其授权范围要绑定到预览时的那批身份；预览为空时授权也必须为空。任何「不可达」类信号在驱动删除时都要有窄化开关。
+
+**迁移要点：** 审计 L5/L13 时问：**预览之后、删除之前有时间差吗？** 有，就要问「这段时间里新出现的对象会被授权吗」，答「会」就是反例形态。
+
+---
+
+### 模式 49 · 交接字段清单要从接收方自己的声明派生
+
+**服务的不变式：** M9
+
+**证据：** `agent/conversation_loop.py`
+
+```python
+# Post-loop finalization lives in agent/turn_finalizer.finalize_turn.
+result = finalize_turn(agent, **{
+    name: getattr(s, name)
+    for name in inspect.signature(finalize_turn).parameters if name != "agent"
+})
+```
+
+字段清单不是手写枚举，是从 `finalize_turn` 自己的签名里读出来的。`finalize_turn` 加了一个参数，调用点自动带上；不需要改两处。
+
+对照反面：手写枚举的清单漏一个字段不报错，接收方拿到 `None`（或默认值）后照常跑完，「状态没传过去」被当成「这个字段本来就空」。这档比「漏传报错」更坏——报错至少能被看到，静默漏传会让缺失一路传到最终输出。
+
+**可迁移的判据：** 跨模块交接的字段清单，**派生式**优于**枚举式**：从接收方的声明（签名、schema、接口）自动派生，让「接收方变了」这个动作成为唯一改动点。枚举式清单要求每次改动两处，两处不一致不报错。
+
+**迁移要点：** 审计 M9 时问：**两处之间的字段清单是怎么保持同步的？** 答「靠人记得改」就是枚举式，`RISK`；答「靠签名/schema 自动派生」是 `OK`。
+
+---
+
+### 模式 50 · 部分失败的编码方式要可配置，且判据看默认方向
+
+**服务的不变式：** L6、L9
+
+**证据：** `agent/moa_loop.py`
+
+```python
+# 配置项 degraded_reference_policy，默认 "loud"
+
+def _degraded_notice(failed_labels, policy, reference_outputs):
+    """返回 "" 当且仅当 not failed_labels or policy.strip().lower() == "silent"，
+    否则返回 "[Reference models unavailable: labels]" 追加进聚合者可见上下文。"""
+```
+
+MoA 是 fan-out：多个 reference model 各自给出参考输出，聚合者（也是模型）看到编号的参考块并自己决定。关键不是「聚合者做不做判断」（见模式 51），而是**失败信息进不进聚合者能看到的输入**：
+
+- `loud`（默认）：失败的 reference 从输出里过滤掉，同时把 `[Reference models unavailable: labels]` 追加进上下文。聚合者知道自己少了几份样本。
+- `silent`：完全静默。聚合者在不知道样本缺失的情况下做出判断。
+
+两种实现都存在，**默认是 loud**。这是 L6「部分失败必须编码进数据」的**可配置形态**——编码方式不再是强制的，但默认方向仍然是判据。默认 `silent` 的部分失败等于把「聚合器在降级条件下工作」伪装成「聚合器正常工作」，和 L10 的「证据缺失时判过」同构。
+
+同文件 `_sum_reference_accounting`：按每个 advisor 自己的费率汇总成本，失败槽位不参与计价——**失败槽位只影响计数，不影响成本口径**。混进计价的分母会让「这次更贵」和「这次少一个人干活」混成同一个信号。
+
+**可迁移的判据：** 部分失败的编码可以做成策略开关，但要判**默认方向**。默认静默的策略 = 默认把降级伪装成正常；判 X5 的「配置漂移」时记成「默认值是不可观测的降级」，不是「配置项存在即可」。
+
+**迁移要点：** 判 L6 时问：**部分失败的策略默认值是什么？** 默认可观测（loud / 编码进数据）= `OK`；默认静默 = `RISK`，要写出来「这条策略有静默选项，用户可能打开」。判 L9 时这一条只能算半个锚点——它证明「降级要可见」（模式 50）和「裁判是谁要说清楚」（模式 51），不证明「冲突能被检出」。
+
+---
+
+### 模式 51 · Fan-out 的聚合者是模型本身，「谁是裁判」是判据不是实现细节
+
+**服务的不变式：** L4、L9
+
+**证据：** `agent/moa_loop.py`
+
+```python
+# 模块 docstring 摘：
+# The slash command marks one user turn as MoA-enabled; the normal agent loop still
+# owns tool calling and turn termination, while this module gathers reference-model
+# context before each model iteration.
+```
+
+MoA 的架构选择：**reference model 只作为上下文提供，不做判断**。聚合者（主模型的下一轮调用）看到编号的参考块，自己决定采纳哪些。这里没有第二个 LLM 去比对「两个 reference 是否矛盾」。
+
+**可迁移的判据：** 判 L9「跨 agent 一致性」时先问**「谁是裁判」**。三种形态：
+
+1. 唯一事实来源字段（案例 3、4 的形态）——冲突在构造期不可表达。
+2. 聚合者是模型本身，看编号参考块自己判——**没有冲突检测**，只有「参考意见」的加权。
+3. 另一个 LLM 比对两份结论——退化成 M12 的「让作者批改自己的作业」形态。
+
+形态 2 在 L9 上是 `RISK` 不是 `OK`：它确实让多份意见可见，但没有一个分支会因为矛盾而停下来。审计要判的不是「有没有多 agent」，是「多 agent 之间有没有一个能因为矛盾而停下来的机制」。
+
+**为什么仍然值得引：** 这是 L9 的**第一个非空锚点**，但是**半锚点**——证明「降级要可见」（模式 50）和「裁判是谁要说清楚」（模式 51），不证明「冲突能被检出」。挂载索引里 L9 因此仍记为空（半锚点按原项判），但 L4 的「分支条件必须可机器判定」多了一个正面案例：MoA 的终止条件仍是主 loop 的终止条件（`owns tool calling and turn termination`），reference model 的输出不进入终止判据——正是 L4 要的「不依赖模型自判」。
+
+**迁移要点：** 判 L4 时问：**哪些条件是可机器判定的？** 判 L9 时问：**裁判是谁，裁判会不会因为矛盾停下来？** 两个问题的答案组合出四种形态，四种都要在报告里写清。
+
+---
+
+### 模式 52 · 反例入册：诊断字段存在但没人填
+
+**服务的不变式：** L1、X1
+
+**证据：** `agent/conversation_loop.py`
+
+```python
+_turn_exit_reason: str = "unknown"  # diagnostic: why the loop ended
+```
+
+取回的 18 个文件里，`_turn_exit_reason` 只赋值 1 处（`agent/turn_preflight_gate.py` 的 `v._turn_exit_reason = "ollama_runtime_context_too_small"`）；同名的结果契约字段 `turn_exit_reason` 只赋值 3 处，全部是上下文压缩超时类终态。可识别的终止路径约 15 条。
+
+**这不是「字段缺失」**——字段存在，注释写着 `# diagnostic: why the loop ended`，默认值 `"unknown"`。问题是**默认值等于没有**：13 条终止路径在观测面上看起来完全一样。
+
+**可迁移的判据：** 判 L1「终态要能区分」时不要只问「有没有字段」，也不要只问「有没有赋值」，要问**比例**：终止路径总数 ÷ 被赋值的路径数。比例低于一半时，「终态可区分」在观测上等价于「全是一条路」，L1 第一条判据不成立，尽管代码里每条路径都写了 `return`。
+
+对照案例 5：harness/harness 的 teardown 把 sibling 状态折成 execution 状态，每个终态都有名字。这里反例方向完全相反——**每条路径都有 return，但没有名字**。
+
+**迁移要点：** 审计 L1/L6 时把判据写成可数的：**先数终止路径，再数被命名的路径**。两个数都是 grep 出来的，不需要读业务逻辑。比例低于一半 → `RISK`；低于三分之一 → `GAP`（观测面上根本分不清）。
+
+---
+
+### 模式 53 · 反例入册：预算豁免通道在本模块外，从 loop 侧不可审计
+
+**服务的不变式：** L1、M1
+
+**证据：** `agent/conversation_loop.py:1484`
+
+```python
+while (s.api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
+```
+
+`agent._budget_grace_call` 是循环的豁免项——只要它为真，即使预算耗尽循环也继续。**它在整个 loop 模块里从未被写入**（取回的 18 个文件里只有这一处引用）。
+
+**可迁移的判据：** 判 L1/M1 时问：**循环条件里引用了本模块不拥有的状态吗？** 有，就追问「这个状态谁能写、什么时候写、写了多久」。答不上来就是**不可审计的豁免通道**。
+
+这档比「没有豁免」更严重：没有豁免是明面上的缺口（M1 直接判 `GAP`），不可审计的豁免是**看不见的缺口**——看起来像设计好的逃逸阀（grace call），但授权点不在 loop 自己的源码里，审计从 loop 侧无法判断。
+
+**为什么仍然值得引：** 证明「条件里出现了守卫的例外」≠「守卫设计得完整」。反向检查方法：把循环条件里出现的每个布尔量列出来，逐个确认写入点在哪个模块、写入点是否可枚举。
+
+**迁移要点：** 审计 M1/L1 时加一条：**列出所有豁免变量，逐个确认写入点**。写入点不可枚举（跨模块、跨进程、外部注入）的豁免通道，一律 `RISK` 起步。
+
+---
+
+### 模式 54 · 反例入册：预算是显式拒绝聚合，不是漏配
+
+**服务的不变式：** L2
+
+**证据：** `agent/iteration_budget.py`
+
+```python
+"""Per-agent iteration budget — thread-safe consume/refund counter.
+
+Each ``AIAgent`` (parent or subagent) holds its own :class:`IterationBudget`: the parent's
+cap is ``max_iterations`` (default 500), each subagent's ``delegation.max_iterations``
+(default 50), so total iterations across parent + subagents can exceed the parent's cap.
+"""
+```
+
+**这是设计意图，写在 docstring 里**——「parent + subagents 总迭代数可以超过父 agent 上限」是明说的。不是漏配聚合预算。
+
+**可迁移的判据：** 判 L2 时把「漏配」和「显式拒绝」分开：
+
+- **漏配**：代码里没写，配置里也没写。判 `GAP`，修法是补聚合预算。
+- **显式拒绝**：代码或文档明确写出「不做聚合」并给出理由。判 `RISK`，要能引用到声明的那句话，修法是补一个跨层总闸或补成本维度兜底（见模式 41）。
+
+两档修复成本不同：漏配要补代码，显式拒绝要补总闸或换维度兜底。**审计建议必须落到具体那一条**，不能混着给。
+
+同类形态是案例 2 的「显式外包」（`while (true)` + 自文档「No built-in turn budget」）——案例 2 是「预算交给外部策略」，案例 6 是「每层局部上限，总和没有上界」。两者都是**显式外包**，方向不同但都是有意设计。
+
+**迁移要点：** 判 L2 时问：**预算的形态是漏配还是显式拒绝？** 判据要有原文引用。判 X5 时同一条：显式写出的「不设上界」和漏配的「没有这一项」在配置审计上长得一样，只有读注释能区分——这一档的差异是**文档差异**，不是代码差异。
+
+---
+
+### 案例 6 小结
+
+**新判据 14 条**（模式 41–54），全部落在既有 29 项不变式里，**没有新增不变式 ID**——这是这个案例的收获，也是它的边界：不变式表的骨架是 14+10+5，六个案例填进去 54 条模式，骨架没变。
+
+**最扎实的一面：** 成本维度和重试预算的交叉（模式 41）、jitter 的并发去相关（模式 45）、配置翻转值的拒绝（模式 46）、报告与已提交的分离（模式 47）、删除授权的 TOCTOU 绑定（模式 48）、字段清单的派生式（模式 49）。这些在案例 1–5 里都没有对应写法。
+
+**反例三条**（模式 52、53、54）——诊断字段没人填、豁免通道在本模块外、预算显式拒绝聚合。三条都是**「设计选择看起来像缺口」**的形态：不是缺陷，但审计不能跳过，因为从外部看它们和缺陷长得一样，唯一区分依据是文档/注释里写没写出来。
+
+**未填的空行：** M12、M14 仍然空；L9 有半锚点（模式 50 + 51）但按原项判仍是空；X4 从空变成有锚点（案例 6 的 `_ATTENDED_PLATFORMS` 字面量集合 + `LoopCapConfig` 的开关分层，见挂载索引）。
+
+---
+
 ## 挂载索引：不变式 → 模式
 
-| 不变式 | 案例 1（模式 1–17） | 案例 2（模式 18–24） | 案例 3 · pi（25–31） | 案例 4 · OpenHarness（32–35） | 案例 5 · harness（36–40） |
-|---|---|---|---|---|---|
-| **M1** | — | 模式 18（自文档化外包）、模式 20 | — | 模式 33（自纠重试不占预算）、模式 35 反例 B | — |
-| **M2** | 模式 4（检查点位置：每波次都在循环内检查） | 模式 22（边界由扩展点定义，不可发现性消除） | — | 模式 33 | — |
-| **M3** | 模式 8（换算比不是常数，`SubPlanBody` 把一整个子 Run 塞进一个节点） | — | — | — | 模式 38（守卫的排除集合） |
-| **M4** | 模式 13、模式 14 | — | 模式 25（截断整批失败） | 模式 32（无上限退出有独立终态） | — |
-| **M5** | 模式 17 | — | 模式 26（未知工具走错误结果，不抛） | — | — |
-| **M6** | — | — | 模式 31（构造期跨字段不变量） | 模式 34（枚举与数字分开钳） | 模式 38（比较器共享默认值） |
-| **M7** | 模式 13（正例与反例同一文件） | — | 模式 25（抢救解析器让截断参数通过校验） | — | — |
-| **M8** | 模式 3 | — | 模式 26 | — | — |
-| **M9** | 模式 1、模式 2、模式 9、模式 10 | 模式 23（跨字段不变量） | 模式 31（规范路径做队列键） | 模式 34（工具结果按提交顺序发出） | — |
-| **M10** | 模式 13 | — | 模式 25 | 模式 32 | — |
-| **M11** | 模式 15 | — | 模式 26、模式 27 | — | — |
-| **M12** | — | — | — | — | — |
-| **M13** | 模式 6、模式 17 | 模式 24 反例 A（建议性 vs 强制层） | — | 模式 35 反例 C（不可覆盖的硬拒层） | — |
-| **M14** | — | — | — | — | — |
-| **L1** | 模式 4、模式 5、模式 7 | 模式 22 | — | 模式 32（三条终态缺的那一条） | 模式 36（信号兜底）、模式 37（终态编码是否启动） |
-| **L2** | — | 模式 18（谁负责补预算） | — | 模式 35 反例 A（两层默认值不一致） | — |
-| **L3** | 模式 8（深度有正向实践，广度明确标为缺口） | — | — | — | 模式 38（守卫排除自身） |
-| **L4** | 模式 7 | — | — | — | — |
-| **L5** | 模式 11、模式 12 | 模式 20、模式 21 | 模式 29（检查点是状态转移）、模式 31（状态依赖清理） | — | 模式 39（noContext 收尾） |
-| **L6** | 模式 16（以反例入册） | — | 模式 30（中断不重调模型） | — | 模式 39、模式 40（部分失败的状态树） |
-| **L7** | 模式 3、模式 4、模式 13、模式 14 | 模式 19 | 模式 26、模式 27 | — | 模式 36、模式 37、模式 39 |
-| **L8** | 模式 15（策略机制正向，默认值反例） | 模式 19（五项要素齐全，含对称 jitter） | 模式 27（双层正则，非重试优先）、模式 28（两层溢出上限） | — | — |
-| **L9** | — | — | — | — | — |
-| **L10** | 模式 3 | 模式 24 反例 C（无上限重试） | — | — | — |
-| **X1** | 模式 10（`last_level` 暴露压缩级别） | 模式 19、模式 20 | 模式 27（重试是事件流） | 模式 34（钳制要可观测）、模式 35 反例 B（聚合器丢字段） | — |
-| **X2** | 模式 1（波次 delta 事件溯源）、模式 13 | 模式 20、模式 21 | 模式 30（`recovery: true` 标记）、模式 29 | — | — |
-| **X3** | 模式 6 | — | — | — | — |
-| **X4** | — | — | — | — | — |
-| **X5** | 模式 5 | 模式 21、模式 23、模式 24 反例 B | 模式 31（构造期跨字段不变量） | 模式 34（非对称钳制） | 模式 38（默认值恰是无上限） |
+| 不变式 | 案例 1（模式 1–17） | 案例 2（模式 18–24） | 案例 3 · pi（25–31） | 案例 4 · OpenHarness（32–35） | 案例 5 · harness（36–40） | 案例 6 · hermes-agent（41–54） |
+|---|---|---|---|---|---|---|
+| **M1** | — | 模式 18（自文档化外包）、模式 20 | — | 模式 33（自纠重试不占预算）、模式 35 反例 B | — | 模式 41（预算 × 单次成本）、模式 53 反例（豁免通道不可审计） |
+| **M2** | 模式 4（检查点位置：每波次都在循环内检查） | 模式 22（边界由扩展点定义，不可发现性消除） | — | 模式 33 | — | — |
+| **M3** | 模式 8（换算比不是常数，`SubPlanBody` 把一整个子 Run 塞进一个节点） | — | — | — | 模式 38（守卫的排除集合） | — |
+| **M4** | 模式 13、模式 14 | — | 模式 25（截断整批失败） | 模式 32（无上限退出有独立终态） | — | 模式 41（未知成本走默认预算，方向即判据）、模式 52 反例（终态命名比例 13/15，无上限退出没有自己的名字） |
+| **M5** | 模式 17 | — | 模式 26（未知工具走错误结果，不抛） | — | — | — |
+| **M6** | — | — | 模式 31（构造期跨字段不变量） | 模式 34（枚举与数字分开钳） | 模式 38（比较器共享默认值） | 模式 46（解析器处理 YAML 引号把 bool 变成字符串） |
+| **M7** | 模式 13（正例与反例同一文件） | — | 模式 25（抢救解析器让截断参数通过校验） | — | — | 模式 42（确定性检测拒绝混合证据，签名含 provider） |
+| **M8** | 模式 3 | — | 模式 26 | — | — | 模式 42（fail open 保留重试，代价写在注释里） |
+| **M9** | 模式 1、模式 2、模式 9、模式 10 | 模式 23（跨字段不变量） | 模式 31（规范路径做队列键） | 模式 34（工具结果按提交顺序发出） | — | 模式 43（清零由消费方判）、模式 49（字段清单从签名派生） |
+| **M10** | 模式 13 | — | 模式 25 | 模式 32 | — | 模式 43（记录与递增的时序：先记录再递增） |
+| **M11** | 模式 15 | — | 模式 26、模式 27 | — | — | 模式 42（`all` 判定 + 证据签名维度） |
+| **M12** | — | — | — | — | — | — |
+| **M13** | 模式 6、模式 17 | 模式 24 反例 A（建议性 vs 强制层） | — | 模式 35 反例 C（不可覆盖的硬拒层） | — | 模式 48（删除授权绑定到确认时的身份）、模式 50（默认方向 loud） |
+| **M14** | — | — | — | — | — | — |
+| **L1** | 模式 4、模式 5、模式 7 | 模式 22 | — | 模式 32（三条终态缺的那一条） | 模式 36（信号兜底）、模式 37（终态编码是否启动） | 模式 52 反例（诊断字段存在但没人填）、模式 53 反例（豁免通道） |
+| **L2** | — | 模式 18（谁负责补预算） | — | 模式 35 反例 A（两层默认值不一致） | — | 模式 54 反例（显式拒绝聚合，不是漏配） |
+| **L3** | 模式 8（深度有正向实践，广度明确标为缺口） | — | — | — | 模式 38（守卫排除自身） | — |
+| **L4** | 模式 7 | — | — | — | — | 模式 51（MoA 的终止判据仍是主 loop 的，不依赖模型自判） |
+| **L5** | 模式 11、模式 12 | 模式 20、模式 21 | 模式 29（检查点是状态转移）、模式 31（状态依赖清理） | — | 模式 39（noContext 收尾） | 模式 47（观察型与已提交分两次发布）、模式 48（TOCTOU 绑定） |
+| **L6** | 模式 16（以反例入册） | — | 模式 30（中断不重调模型） | — | 模式 39、模式 40（部分失败的状态树） | 模式 47（报告措辞匹配实际状态）、模式 50（部分失败编码可配置，看默认方向） |
+| **L7** | 模式 3、模式 4、模式 13、模式 14 | 模式 19 | 模式 26、模式 27 | — | 模式 36、模式 37、模式 39 | 模式 44（窄分类器 + 加长退避）、模式 41（成本触发的预算收缩） |
+| **L8** | 模式 15（策略机制正向，默认值反例） | 模式 19（五项要素齐全，含对称 jitter） | 模式 27（双层正则，非重试优先）、模式 28（两层溢出上限） | — | — | 模式 44（上限与退避表一起算，共用常量单一来源）、模式 45（jitter 种子并发去相关） |
+| **L9** | — | — | — | — | — | 模式 50、模式 51（半锚点：降级可见 + 裁判是谁，缺冲突检测） |
+| **L10** | 模式 3 | 模式 24 反例 C（无上限重试） | — | — | — | — |
+| **X1** | 模式 10（`last_level` 暴露压缩级别） | 模式 19、模式 20 | 模式 27（重试是事件流） | 模式 34（钳制要可观测）、模式 35 反例 B（聚合器丢字段） | — | 模式 52 反例（观测面比例：13/15 终止路径同名）、模式 47（措辞分两级） |
+| **X2** | 模式 1（波次 delta 事件溯源）、模式 13 | 模式 20、模式 21 | 模式 30（`recovery: true` 标记）、模式 29 | — | — | 模式 43（状态作用域可重建：清零由单一判据决定） |
+| **X3** | 模式 6 | — | — | — | — | — |
+| **X4** | — | — | — | — | — | 案例 6 的分层护栏（`_ATTENDED_PLATFORMS` 字面量集合 + `LoopCapConfig` 的开关分层，见案例 6 前言） |
+| **X5** | 模式 5 | 模式 21、模式 23、模式 24 反例 B | 模式 31（构造期跨字段不变量） | 模式 34（非对称钳制） | 模式 38（默认值恰是无上限） | 模式 46（越界与翻转两半都要有清单）、模式 50（默认值是不可观测的降级）、 |
 
-这次扩充的收获**不是补空行**——此前 5 个空行里只补上了 **M6** 一个（模式 31 的构造期跨字段不变量、模式 34 的枚举与数字分开钳、模式 38 的比较器共享默认值），**M12、M14、L9、X4 仍然空**，L10 仍然只有半个锚点。**真正的新增是判据本身变硬了**：已有锚点的项拿到了更强、更具体的写法（L8 从「五项要素齐全」变成「双层正则 + 非重试优先 + 两层溢出上限」，L1 从「三条终态」变成「三条终态 + 无上限退出独立终态 + 可丢信号需轮询兜底」），以及下面这 10 条此前没有对应条目的新判据。**空行没被填满这件事本身就是最强的结论**：M12（输出契约）、M14（不确定性与可复现）、L9（跨 agent 一致性）、X4（环境分层配置）这四项在五个不同语言、不同领域（其中一个是非 LLM 的）的代码库里都找不到可引写法——缺失是系统性的，不是这几个项目偷懒。
+案例 3–5 那次扩充的收获**不是补空行**——此前 5 个空行里只补上了 **M6** 一个（模式 31 的构造期跨字段不变量、模式 34 的枚举与数字分开钳、模式 38 的比较器共享默认值）。案例 6（模式 41–54）又补上了 **X4** 一个：案例 6 的分层护栏——`_ATTENDED_PLATFORMS` 字面量集合 + `LoopCapConfig` 的开关分层，给出了「环境间差异由一个集合的边界决定、上限按受哪个开关控制分层」的可引写法（该锚点在案例 6 前言，不占模式编号）。
 
-- **已记录的缺口**（有缺陷结论，只是没有好写法可引）：M12 无输出契约、L9 无跨 agent 一致性检查、X4 无配置分层、M14 从不落盘温度与模型名、L10 的「挂起等人工」在四个案例间反复缺失。M6 与 L3 此前也空着，M6 已有锚点（见上表），L3 自案例 1 模式 8 起有锚点（深度有正向实践、广度明确标为缺口）。
-- **新增的判据**（此前没有对应条目的）：M7 的「抢救解析器让截断参数通过校验」三档判定（模式 25）、M11 的「同批分歧必须全批一致才终止」（模式 26）、L8 的「白名单内模式重叠时的优先级」与「计时 API 自身的上限」两问（模式 27、28）、M1/M2 的「自纠重试不占调用方预算」（模式 33）、X5 的「钳制要可观测」（模式 34）、M13 的「不可覆盖层与求值顺序」（模式 35 反例 C）、L1 的「可丢的唤醒信号需有限轮询兜底」（模式 36）、L3 的「守卫排除自身」（模式 38）、L5 的「收尾不继承触发它的取消令牌」（模式 39）、L6 的「部分失败必须编码进数据而非只进日志」（模式 40）。
+**空行没被填满这件事仍然是最强的结论**：M12（输出契约）、M14（不确定性与可复现）这两项在六个不同语言、不同领域（其中一个是非 LLM 的、一个是终端 agent 产品）的代码库里仍然找不到可引写法——缺失是系统性的，不是这几个项目偷懒。六个案例里没有任何一个把「输出是否符合契约」做成机器可判定的；也没有任何一个把温度 / 模型名 / 采样参数落盘到能重建一次运行的程度。
+
+- **已记录的缺口**（有缺陷结论，只是没有好写法可引）：M12 无输出契约、L9 无跨 agent 冲突检测、M14 从不落盘温度与模型名、L10 的「挂起等人工」在六个案例间反复缺失。M6 与 L3 此前也空着，M6 已有锚点（见上表），L3 自案例 1 模式 8 起有锚点（深度有正向实践、广度明确标为缺口）。X4 原为空，案例 6 补上（模式 46、模式 54）。
+- **案例 3–6 新增的判据**（此前没有对应条目的）：M7 的「抢救解析器让截断参数通过校验」三档判定（模式 25）、M11 的「同批分歧必须全批一致才终止」（模式 26）、L8 的「白名单内模式重叠时的优先级」与「计时 API 自身的上限」两问（模式 27、28）、M1/M2 的「自纠重试不占调用方预算」（模式 33）、X5 的「钳制要可观测」（模式 34）、M13 的「不可覆盖层与求值顺序」（模式 35 反例 C）、L1 的「可丢的唤醒信号需有限轮询兜底」（模式 36）、L3 的「守卫排除自身」（模式 38）、L5 的「收尾不继承触发它的取消令牌」（模式 39）、L6 的「部分失败必须编码进数据而非只进日志」（模式 40）、**M1 的「预算要乘上单次尝试成本」（模式 41）、M7/M11 的「确定性检测拒绝混合证据」（模式 42）、M9/M10 的「清零责任归消费方」（模式 43）、L8 的「上限与退避表一起算」（模式 44）、L8 的「jitter 种子并发去相关」（模式 45）、X5 的「越界与翻转两半都要有清单」（模式 46）、L5/L6 的「观察型与已提交分两次发布」（模式 47）、L5/M13 的「删除授权绑定到确认时的身份」（模式 48）、M9 的「字段清单从签名派生」（模式 49）、L6/X5 的「默认方向是判据」（模式 50）、L4/L9 的「裁判是谁要说清楚」（模式 51）、L1/X1 的反例「诊断字段存在但没人填」（模式 52）、L1/M1 的反例「豁免通道在本模块外」（模式 53）、L2/X5 的反例「显式拒绝聚合，不是漏配」（模式 54）**。
 
 **不要把空行理解成「还没整理」——空行本身就是结论。尤其不要为了让挂载索引看起来完整而发明做法**：不变式表里已经写了它们缺什么会怎样，缺一个正向锚点不会让审计更弱，编造一个会。
 
 （注：L10 有锚点但只有半个——模式 3 的 fail-fast 命名只解决了「死得响不响」，没解决「挂起等人工」和「验收器」两半；模式 24 反例 C 记录的是同一缺口的另一种形态。半锚点也是锚点，按原项判。）
 
+（注：L9 现在也有半锚点——模式 50 的「降级要可见」和模式 51 的「裁判是谁」覆盖了 L9 的前两问，但 L9 判据的第三问「有没有一个分支会因为矛盾而停下来」没有锚点，所以仍按空项判。审计 L9 时这三个半锚点都要引。）
+
 （注：案例 3 与案例 4 的 `stopReason: "length"` / `finish_reason` 判据互相印证，模式 25 与模式 32 应一起引——一个讲「截断时做什么」，一个讲「截断后如何结束」。）
+
+（注：案例 6 的三条反例——模式 52、53、54——是「设计选择看起来像缺口」的形态：不是缺陷，但审计不能跳过，因为从外部看它们和缺陷长得一样，唯一区分依据是文档 / 注释里写没写出来。引的时候连同这个前提一起引，不要只引缺陷本身。）
 
 ---
 
@@ -1140,6 +1628,8 @@ if err != nil {
 2. 判 `OK` 时查 §0，确认判的是「结构性不可表达」还是「运行时检查」。
 3. 判 `PENDING` 时不要引本文件——正向锚点不能替代核验。
 
-本文件的锚点绑定 **2026-09-07**（案例 1–2）与 **2026-09-08**（案例 3–5）两份案例快照。**引锚点前先确认目标项目是否同一版本**；引「做法」不需要确认，引「行号」需要。
+本文件的锚点绑定 **2026-09-07**（案例 1–2）与 **2026-09-08**（案例 3–6）两份案例快照。**引锚点前先确认目标项目是否同一版本**；引「做法」不需要确认，引「行号」需要。
 
-案例 2–5 都是活跃迭代的上游主分支（`master` / `main`），行号漂移快于案例 1。另外两类锚点要注意方向：案例 5 的锚点来自**非 LLM 项目**，引它时是在引「调度类系统的通用不变式」，不是引「agent 框架的做法」；案例 4 的多个锚点是**反例**（模式 35），引的时候要连同「可迁移的判据」一起引，不要只引缺陷本身。
+案例 2–6 都是活跃迭代的上游主分支（`master` / `main`），行号漂移快于案例 1。三类锚点要注意方向：案例 5 的锚点来自**非 LLM 项目**，引它时是在引「调度类系统的通用不变式」，不是引「agent 框架的做法」；案例 4 的多个锚点是**反例**（模式 35），引的时候要连同「可迁移的判据」一起引，不要只引缺陷本身；案例 6 的三条反例（模式 52、53、54）是「设计选择看起来像缺口」的形态，引的时候要连着「不是缺陷，但审计不能跳过」这个前提一起引。
+
+案例 3–6 都是**定向抽取**，不是全仓库通读：取回与不变式相关的模块（18 个文件 / 案例 6），大文件（>70KB）只做头部通读 + 定向检索。所以「本案例没有某项做法」不等于「该项目没有」，等于「取回的这部分里没有」。**引锚点时不要写「本项目完全没有 X」，写「取回的部分里没找到 X」**——这两个断言的证据强度完全不同。
