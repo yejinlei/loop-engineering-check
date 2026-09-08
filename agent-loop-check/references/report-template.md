@@ -82,7 +82,7 @@
 ```json
 {
   "skill": "loop-engineering-check",
-  "skill_version": "1.5.0",
+  "skill_version": "1.5.1",
   "generated_at": "2026-09-07T06:10:00Z",
   "target": "path/to/project",
   "framework": {
