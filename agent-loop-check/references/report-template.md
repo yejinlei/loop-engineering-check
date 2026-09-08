@@ -82,7 +82,7 @@
 ```json
 {
   "skill": "loop-engineering-check",
-  "skill_version": "1.7.0",
+  "skill_version": "1.7.1",
   "generated_at": "2026-09-07T06:10:00Z",
   "target": "path/to/project",
   "framework": {
@@ -111,6 +111,20 @@
       "framework_note": "LangGraph 的 upper-limit 数节点执行，换算比约 2:1"
     }
   ],
+  "scan": {
+    "scanned_files": 243,
+    "skipped_files": 68575,
+    "skipped_reasons": {"inside_skipped_dir": 68251, "vendor_dir": 324},
+    "errors": 0,
+    "scanner_coverage": {
+      "hint_ids": ["L8", "M1", "M11", "M14", "M5", "M8", "M9"],
+      "context_ids": ["L2", "M1", "M2", "M3"],
+      "no_signal_ids": ["M4", "M6", "M7", "M10", "M12", "M13",
+                        "L1", "L3", "L4", "L5", "L6", "L7", "L9", "L10",
+                        "X1", "X2", "X3", "X4", "X5"],
+      "total_invariants": 29
+    }
+  },
   "summary": {
     "blockers": 0,
     "gaps": 0,
@@ -131,6 +145,7 @@
 | `severity` | `blocker` / `major` / `minor` | 只有 `blocker` 计入 `summary.blockers` |
 | `evidence.confidence` | `introspected` / `source` / `official_doc` / `version_knowledge` / `pending` | 与报告里的证据等级五档一一对应：`[自省实测]` / `[源码确认]` / `[官方文档确认]` / `[版本知识]` / `[待确认]` |
 | `confidence`（顶层） | `introspected` / `declared_only` / `grep_only` | 整个审计的证据等级，自省失败时降一级 |
+| `scan.scanner_coverage` | `hint_ids` / `context_ids` / `no_signal_ids` / `total_invariants` | `hint_ids` 能产出 pattern 提示；`context_ids` 只提供线索；`no_signal_ids` 必须逐行阅读。**某项没有提示 ≠ 该项通过**——是「没查」，不是「查了、没有」 |
 
 **CI 用法**：
 

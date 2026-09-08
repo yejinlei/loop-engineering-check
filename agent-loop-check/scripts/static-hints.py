@@ -42,16 +42,39 @@ SKIP_DIRS = {
 PY_SUFFIXES = {".py"}
 JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 
-# 预算/limiter 关键词。M1 的核心：出现即「这里可能有限制器」，缺失才值得看。
-LIMITER_KW = re.compile(
+# 第三方/研究副本目录名。审 agent loop 时它们不是被审计对象——实测
+# deepseek_det2 的 research/minirag_src 是被拷进来的上游 MiniRAG、skills/ 是
+# 外部技能包，两者贡献了 24 条 error_swallowed、6 条 LLM client、111 条
+# timeout 命中，全部是别人项目的代码。默认不扫，用 --scan-vendor 打开。
+VENDOR_DIRS = {
+    "research", "vendor", "third_party", "thirdparty", "external", "ext",
+    "examples", "example", "samples", "sample", "contrib", "deps",
+    "sandbox", "playground", "spike", "experiment", "experiments",
+}
+
+# 预算/limiter 关键词，分两层。M1 的判据是「循环有没有上限」，
+# 但 timeout 属于传输层设置，不是循环预算——实测 deepseek_det2 的 626 条
+# limiter 命中里 451 条（72%）就是 timeout，把真正相关的 recursion_limit /
+# max_turns 全部淹没。所以分成两个正则、两个 tier 输出，而不是一个扁平清单。
+LOOP_BUDGET_KW = re.compile(
     r"""max_turns|max_iterations|max_iter|max_steps|max_retries|max_retry
         |max_loop|loop_limit|recursion_limit|max_executions
-        |max_seconds|max_duration|timeout|deadline
+        |max_seconds|max_duration|max_waves|max_concurrency
         |budget|cost_limit|max_cost
     """,
     re.VERBOSE | re.IGNORECASE,
 )
 TOKEN_KW = re.compile(r"max_tokens|max_output_tokens|max_completion_tokens", re.IGNORECASE)
+# 行级扫描用这一个正则、一次 pass 覆盖三层——拆成三个正则会多扫两遍全文。
+_LINE_LIMITER_KW = re.compile(
+    r"(?P<transport>timeout|deadline)"
+    r"|(?P<token>max_tokens|max_output_tokens|max_completion_tokens)"
+    r"|(?P<budget>max_turns|max_iterations|max_iter|max_steps|max_retries|max_retry"
+    r"|max_loop|loop_limit|recursion_limit|max_executions"
+    r"|max_seconds|max_duration|max_waves|max_concurrency"
+    r"|budget|cost_limit|max_cost)",
+    re.IGNORECASE,
+)
 
 RETRY_NAME = re.compile(r"retry|attempt|tries|retries", re.IGNORECASE)
 BACKOFF_KW = re.compile(r"sleep|backoff|exponential|jitter", re.IGNORECASE)
@@ -86,6 +109,33 @@ JS_HINTS = [
     ("L8", "retry_without_backoff", re.compile(r"for\s*\(.*(?:retry|attempt).*\{")),
     ("M14", "temperature_without_seed", re.compile(r"temperature\s*[:=][^,}]{0,40}")),
 ]
+
+
+def _scanner_coverage():
+    """声明本脚本能产出提示的不变式 ID。
+
+    从本模块自己的源码里抓 Hint(...) 与 result.add(...) 的第一个实参推导，
+    不用手写清单——清单会漂移，而推导跟着代码走。这是「能检到什么」的
+    唯一声明：报告用它算覆盖率，避免把「没检出」误读成「这项通过」。
+
+    注意这是能力声明，不是本次命中统计：M9 有能力但零命中，仍算覆盖。
+    """
+    try:
+        src = Path(__file__).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    ids = set()
+    for m in re.finditer(r"(?:Hint\(|result\.add\(\s*Hint\()\s*[\"']([MLX]\d+)[\"']", src):
+        ids.add(m.group(1))
+    return sorted(ids)
+
+
+# 只对部分不变式有检出能力；其余项必须靠逐行阅读，脚本产出「无提示」
+# 不等于该项通过。
+SCANNER_HINT_IDS = _scanner_coverage()
+# 只提供线索、不构成判定的信号来源：limiters → M2 校验点位置；
+# framework_imports → M3 换算比；raw_llm_clients → M1 无框架兜底。
+SCANNER_CONTEXT_IDS = sorted({"M1", "M2", "M3", "L2"})
 
 
 @dataclass
@@ -126,8 +176,10 @@ class ScanResult:
         self._cl_seen.add(key)
         self.raw_llm_clients.setdefault(name, []).append({"path": path, "line": line})
 
-    def note_limiter(self, text: str, path: str, line: int):
-        self.limiter_mentions.append({"text": text, "path": path, "line": line})
+    def note_limiter(self, text: str, path: str, line: int, tier: str = "loop_budget"):
+        # tier 分层输出，避免传输层 timeout 淹没循环预算命中
+        self.limiter_mentions.append(
+            {"text": text, "path": path, "line": line, "tier": tier})
 
     def add(self, hint: Hint):
         self.hints.append(hint)
@@ -342,7 +394,9 @@ def scan_python(path: Path, source: str, root: Path, result: ScanResult):
         hdr = header_text(source, node)
         body = body_text(source, node)
         combined = hdr + "\n" + body
-        has_limiter = bool(LIMITER_KW.search(combined))
+        # 只有循环预算算 limiter：timeout 是传输层设置，不是循环守卫，
+        # 拿它当 has_limiter 会让「有超时」掩盖「没限轮」。
+        has_limiter = bool(LOOP_BUDGET_KW.search(combined) or TOKEN_KW.search(combined))
         has_break = bool(re.search(r"\bbreak\b", body))
         bounded_by_range = isinstance(node, ast.For) and bool(
             re.search(r"range\s*\(\s*[A-Za-z_][\w\[\].]?\s*\)", hdr)
@@ -371,10 +425,11 @@ def scan_python(path: Path, source: str, root: Path, result: ScanResult):
     for lineno, line in enumerate(source.splitlines(), 1):
         if line.lstrip().startswith("#"):
             continue
-        for m in LIMITER_KW.finditer(line):
-            result.note_limiter(m.group(0), rel_path, lineno)
-        for m in TOKEN_KW.finditer(line):
-            result.note_limiter(m.group(0), rel_path, lineno)
+        for m in _LINE_LIMITER_KW.finditer(line):
+            # 一次 pass 覆盖三层，靠 named group 决定 tier
+            g = m.lastgroup
+            tier = "transport" if g == "transport" else                    "token_budget" if g == "token" else "loop_budget"
+            result.note_limiter(m.group(0), rel_path, lineno, tier)
         for name, regex in FRAMEWORK_IMPORTS.items():
             if regex.match(line):
                 result.note_framework(name, rel_path, lineno)
@@ -399,8 +454,11 @@ def scan_js(path: Path, source: str, root: Path, result: ScanResult):
             for mod in RAW_LLM_MODULES:
                 if mod in line:
                     result.note_client(mod, rel_path, lineno)
-        for m in LIMITER_KW.finditer(line):
-            result.note_limiter(m.group(0), rel_path, lineno)
+        for m in _LINE_LIMITER_KW.finditer(line):
+            # 一次 pass 覆盖三层，靠 named group 决定 tier
+            g = m.lastgroup
+            tier = "transport" if g == "transport" else                    "token_budget" if g == "token" else "loop_budget"
+            result.note_limiter(m.group(0), rel_path, lineno, tier)
 
 
 def _hit(names, value: str) -> bool:
@@ -408,14 +466,15 @@ def _hit(names, value: str) -> bool:
     return any(value.startswith(n) for n in names) if names else False
 
 
-def iter_files(root: Path, max_kb: int, excludes=()):
+def iter_files(root: Path, max_kb: int, excludes=(), vendor_dirs=frozenset()):
     """产出 (路径, 后缀)。跳过的文件不产出，但由 main 侧统计原因。
 
     目录裁剪从根开始（os.walk 原地改 dirnames），所以排除 site-packages
     会拦住它下面所有层级；排除单个文件则需要精确到文件名。
     """
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if not _is_pruned_dir(d, excludes)]
+        dirnames[:] = [d for d in dirnames
+                       if not _is_pruned_dir(d, excludes, vendor_dirs)]
         for fn in filenames:
             p = Path(dirpath) / fn
             suffix = p.suffix.lower()
@@ -431,13 +490,23 @@ def iter_files(root: Path, max_kb: int, excludes=()):
             yield p, suffix
 
 
-def _is_pruned_dir(name: str, excludes=()) -> bool:
-    """目录名是否被裁剪。iter_files 与 count_skipped 共用这一条规则，
-    保证「扫描到」与「跳过」的口径一致。"""
+def own_pruned_by_other(name: str, excludes=()) -> bool:
+    """目录是否因为 SKIP_DIRS / 点前缀 / --exclude 被裁剪（不含 vendor_dirs）。
+
+    用于区分「跳过的原因是第三方目录」还是「被别的规则拦住了」。
+    """
     return name in SKIP_DIRS or name.startswith(".") or _hit(excludes, name)
 
 
-def count_skipped(root: Path, max_kb: int, candidates, excludes=()):
+def _is_pruned_dir(name: str, excludes=(), vendor_dirs=frozenset()) -> bool:
+    """目录名是否被裁剪。iter_files 与 count_skipped 共用这一条规则，
+    保证「扫描到」与「跳过」的口径一致。"""
+    return (name in SKIP_DIRS or name.startswith(".") or _hit(excludes, name)
+            or (vendor_dirs and name in vendor_dirs))
+
+
+def count_skipped(root: Path, max_kb: int, candidates, excludes=(),
+               vendor_dirs=frozenset()):
     """统计跳过了哪些文件及原因。
 
     跳过是常见操作，必须可观测——否则读者会把「扫描到 N 个文件」
@@ -451,16 +520,22 @@ def count_skipped(root: Path, max_kb: int, candidates, excludes=()):
     增量继承，os.walk 自顶向下保证父目录先产出。
     """
     scanned = {p.as_posix() for p, _ in candidates}
-    counts = {"inside_skipped_dir": 0, "excluded": 0, "oversize": 0, "unreadable": 0}
+    counts = {"inside_skipped_dir": 0, "vendor_dir": 0, "excluded": 0,
+              "oversize": 0, "unreadable": 0}
     root_s = str(root)
     # 每个目录是否「自身或其祖先被裁剪」。root 本身不算裁剪——我们就是要从它往下走。
     inside_pruned = {}
     for dirpath, _dirnames, filenames in os.walk(root):
         parent = os.path.dirname(dirpath)
         is_root = dirpath == root_s
-        own = (not is_root) and _is_pruned_dir(os.path.basename(dirpath), excludes)
+        nm = os.path.basename(dirpath)
+        is_vendor = bool(vendor_dirs and nm in vendor_dirs)
+        own = (not is_root) and _is_pruned_dir(nm, excludes, vendor_dirs)
         # os.walk 不跟进符号链接目录，所以这里不需要任何解析就能继承父目录的结论
         pruned = own or inside_pruned.get(parent, False)
+        # 只有「裁剪纯粹因为它在 vendor_dirs 里」才算 vendor_dir；
+        # 已经被 exclude 或 SKIP_DIRS 拦住的，按原来的原因归类
+        vendor_dir = is_vendor and (not is_root) and not _hit(excludes, nm)             and not own_pruned_by_other(nm, excludes)
         inside_pruned[dirpath] = pruned
         for fn in filenames:
             p = Path(dirpath) / fn
@@ -474,7 +549,7 @@ def count_skipped(root: Path, max_kb: int, candidates, excludes=()):
                 counts["unreadable"] += 1
                 continue
             if pruned:
-                why = "inside_skipped_dir"
+                why = "vendor_dir" if vendor_dir else "inside_skipped_dir"
             elif _hit(excludes, fn):
                 why = "excluded"
             else:
@@ -499,6 +574,9 @@ def main(argv=None) -> int:
     ap.add_argument("--max-file-kb", type=int, default=512)
     ap.add_argument("--exclude", action="append", default=[],
                     help="按目录名/文件名前缀排除，可重复（如 --exclude site-packages）")
+    ap.add_argument("--scan-vendor", action="store_true",
+                    help="同时扫描第三方/研究副本目录（research、examples 等），"
+                         "默认跳过——它们不是被审计对象")
     args = ap.parse_args(argv)
 
     setup_stdout()
@@ -509,6 +587,8 @@ def main(argv=None) -> int:
         return 2
 
     excludes = tuple(args.exclude or [])
+    # 默认跳过第三方目录；显式 --scan-vendor 打开
+    vendor_dirs = frozenset() if args.scan_vendor else frozenset(VENDOR_DIRS)
     # 单文件输入时，用它的父目录做根，保证 rel() 输出有意义的相对路径
     root = target if target.is_dir() else target.parent.resolve()
     if target.is_file() and _hit(excludes, target.name):
@@ -516,7 +596,8 @@ def main(argv=None) -> int:
         return 2
 
     if target.is_dir():
-        candidates = list(iter_files(target.resolve(), args.max_file_kb, excludes))
+        candidates = list(iter_files(
+            target.resolve(), args.max_file_kb, excludes, vendor_dirs))
     else:
         candidates = [(target.resolve(), target.suffix.lower())]
 
@@ -535,12 +616,25 @@ def main(argv=None) -> int:
 
     if target.is_dir():
         result.skipped_reasons = count_skipped(
-            target.resolve(), args.max_file_kb, candidates, excludes)
+            target.resolve(), args.max_file_kb, candidates, excludes, vendor_dirs)
         result.skipped_files = result.skipped_reasons.get("total", 0)
         result.skipped_reasons.pop("total", None)
 
     if args.format == "json":
         d = asdict(result)
+        # 检出能力声明：让报告能区分「查了、没有」和「这项脚本查不了」
+        d["scanner_coverage"] = {
+            "hint_ids": SCANNER_HINT_IDS,
+            "context_ids": SCANNER_CONTEXT_IDS,
+            "no_signal_ids": sorted(
+                f for f in ["M%d" % i for i in range(1, 15)]
+                + ["L%d" % i for i in range(1, 11)]
+                + ["X%d" % i for i in range(1, 6)]
+                if f not in SCANNER_HINT_IDS and f not in SCANNER_CONTEXT_IDS),
+            "total_invariants": 29,
+            "note": "hint_ids 能产出 pattern 提示；context_ids 只提供线索不构成判定；"
+                    "no_signal_ids 必须靠逐行阅读，无提示不等于该项通过",
+        }
         d.pop("_fw_seen", None)
         d.pop("_cl_seen", None)
         emit(json.dumps(d, ensure_ascii=False, indent=2))

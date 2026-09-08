@@ -32,7 +32,7 @@
 2. **使用** — 源码 import（声明 ≠ 使用，只在清单里没被 import 的记为「未使用」，不参与差异矩阵）
 3. **自省** — 本机 introspect 已安装包的真实签名（API 名从用户机器抓的，不是从记忆背的）
 
-`scripts/static-hints.py` 是只读静态扫描器，产出**候选证据**（行号 + pattern），供语义审计确认或排除。扫描是保守的：命中 ≠ 违规，报告里禁止直接引用 pattern 名当结论。
+`scripts/static-hints.py` 是只读静态扫描器，产出**候选证据**（行号 + pattern），供语义审计确认或排除。扫描是保守的：命中 ≠ 违规，报告里禁止直接引用 pattern 名当结论。双向都要看：**无命中 ≠ 通过**——实测只覆盖 7 项不变式（M1/M5/M8/M9/M11/M14/L8），19 项脚本给不出信号、必须靠逐行阅读；输出里的 `scanner_coverage` 字段就是这份检出能力声明，报告要照它区分「查了、没有」和「没查」。第三方/研究副本目录（`research`、`examples`、`vendor` 等）默认跳过，用 `--scan-vendor` 打开。
 
 ## 证据等级
 
@@ -96,7 +96,7 @@ python -c "import json,sys; sys.exit(1 if json.load(open('loop-audit.json',encod
 
 ```
 loop-engineering-check/
-├── SKILL.md                     # 技能主体（227 行，含 29 项速览表 + M/L/X 三层详表与正向判据）
+├── SKILL.md                     # 技能主体（233 行，含 29 项速览表 + M/L/X 三层详表与正向判据）
 ├── README.md                    # 本文件
 ├── LICENSE
 ├── references/
@@ -104,7 +104,7 @@ loop-engineering-check/
 │   ├── loop-engineering-patterns.md  # 正向实践库：6 个案例、54 条做法（1635 行）
 │   └── report-template.md       # 报告与 JSON 结构模板
 └── scripts/
-    └── static-hints.py          # 只读静态提示扫描器（标准库，562 行）
+    └── static-hints.py          # 只读静态提示扫描器（标准库，656 行）
 ```
 
 ## 实践来源
