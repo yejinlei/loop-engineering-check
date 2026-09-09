@@ -134,8 +134,24 @@ def _scanner_coverage():
 # 不等于该项通过。
 SCANNER_HINT_IDS = _scanner_coverage()
 # 只提供线索、不构成判定的信号来源：limiters → M2 校验点位置；
-# framework_imports → M3 换算比；raw_llm_clients → M1 无框架兜底。
-SCANNER_CONTEXT_IDS = sorted({"M1", "M2", "M3", "L2"})
+# framework_imports → M3 换算比；raw_llm_clients → L2 循环类型。
+# 这三项故意避开 hint_ids——context 和 hint 要是重叠，7+4+19 就对不上 29，
+# 读者按分类计数会算错。M1 虽然也拿到 raw_llm_clients 的线索，但它是 hint
+# 级覆盖，归 hint_ids；raw_llm_clients 对它只是「无框架兜底」的补充线索。
+SCANNER_CONTEXT_IDS = sorted({"M2", "M3", "L2"})
+
+# 完整不变式骨架：M1-M14 / L1-L10 / X1-X5，共 29 项。
+# 从字符串派生而不是手写 29 个 ID，这样骨架变更时推导跟着走。
+ALL_INVARIANT_IDS = sorted(
+    ["M%d" % i for i in range(1, 15)] + ["L%d" % i for i in range(1, 11)]
+    + ["X%d" % i for i in range(1, 6)])
+
+# 三类划分必须互斥且合计 = 全骨架，否则报告里的覆盖率算不出来。
+# 校验放在 main() 的 JSON 分支（写一条 errors 标记 scanner_coverage 不可信），
+# 不放这里：import 时 assert 会让整个脚本无输出，而报告其余部分是可信的——
+# 宁可交出一份标注了「覆盖率不可信」的数据，也不要一份空报告。
+SCANNER_NO_SIGNAL_IDS = sorted(
+    set(ALL_INVARIANT_IDS) - set(SCANNER_HINT_IDS) - set(SCANNER_CONTEXT_IDS))
 
 
 @dataclass
@@ -490,19 +506,18 @@ def iter_files(root: Path, max_kb: int, excludes=(), vendor_dirs=frozenset()):
             yield p, suffix
 
 
-def own_pruned_by_other(name: str, excludes=()) -> bool:
-    """目录是否因为 SKIP_DIRS / 点前缀 / --exclude 被裁剪（不含 vendor_dirs）。
-
-    用于区分「跳过的原因是第三方目录」还是「被别的规则拦住了」。
-    """
-    return name in SKIP_DIRS or name.startswith(".") or _hit(excludes, name)
-
-
 def _is_pruned_dir(name: str, excludes=(), vendor_dirs=frozenset()) -> bool:
     """目录名是否被裁剪。iter_files 与 count_skipped 共用这一条规则，
-    保证「扫描到」与「跳过」的口径一致。"""
-    return (name in SKIP_DIRS or name.startswith(".") or _hit(excludes, name)
-            or (vendor_dirs and name in vendor_dirs))
+    保证「扫描到」与「跳过」的口径一致。
+
+    返回包 bool()：`vendor_dirs and name in vendor_dirs` 在 vendor_dirs 是空
+    容器时短路返回空容器本身而不是 False——不包的话这个 -> bool 会漏出 () /
+    frozenset()，调用方靠「恰好 falsy」才没出错，类型契约和实现脱节。
+    要判断「裁剪是不是 vendor 造成的」，把 vendor_dirs 传成空集合即可，
+    不需要另设一个函数。
+    """
+    return bool(name in SKIP_DIRS or name.startswith(".")
+                or _hit(excludes, name) or name in vendor_dirs)
 
 
 def count_skipped(root: Path, max_kb: int, candidates, excludes=(),
@@ -529,13 +544,16 @@ def count_skipped(root: Path, max_kb: int, candidates, excludes=(),
         parent = os.path.dirname(dirpath)
         is_root = dirpath == root_s
         nm = os.path.basename(dirpath)
-        is_vendor = bool(vendor_dirs and nm in vendor_dirs)
-        own = (not is_root) and _is_pruned_dir(nm, excludes, vendor_dirs)
+        is_vendor = bool(nm in vendor_dirs)
+        own = bool((not is_root) and _is_pruned_dir(nm, excludes, vendor_dirs))
         # os.walk 不跟进符号链接目录，所以这里不需要任何解析就能继承父目录的结论
         pruned = own or inside_pruned.get(parent, False)
         # 只有「裁剪纯粹因为它在 vendor_dirs 里」才算 vendor_dir；
-        # 已经被 exclude 或 SKIP_DIRS 拦住的，按原来的原因归类
-        vendor_dir = is_vendor and (not is_root) and not _hit(excludes, nm)             and not own_pruned_by_other(nm, excludes)
+        # 被 SKIP_DIRS / 点前缀 / --exclude 拦住的归 inside_skipped_dir。
+        # 判断法：把 vendor_dirs 传成空集合再看一次——两次相减就是 vendor 的贡献。
+        # 注意不能写成 `not own`：own 是带 vendor_dirs 算的，vendor 目录自己
+        # 就把 own 置成 True，那样 vendor_dir 永远为 False（已踩过）。
+        vendor_dir = is_vendor and not is_root and not _is_pruned_dir(nm, excludes)
         inside_pruned[dirpath] = pruned
         for fn in filenames:
             p = Path(dirpath) / fn
@@ -626,15 +644,22 @@ def main(argv=None) -> int:
         d["scanner_coverage"] = {
             "hint_ids": SCANNER_HINT_IDS,
             "context_ids": SCANNER_CONTEXT_IDS,
-            "no_signal_ids": sorted(
-                f for f in ["M%d" % i for i in range(1, 15)]
-                + ["L%d" % i for i in range(1, 11)]
-                + ["X%d" % i for i in range(1, 6)]
-                if f not in SCANNER_HINT_IDS and f not in SCANNER_CONTEXT_IDS),
-            "total_invariants": 29,
+            "no_signal_ids": SCANNER_NO_SIGNAL_IDS,
+            "total_invariants": len(ALL_INVARIANT_IDS),
             "note": "hint_ids 能产出 pattern 提示；context_ids 只提供线索不构成判定；"
                     "no_signal_ids 必须靠逐行阅读，无提示不等于该项通过",
         }
+        # 划分坏了说明覆盖声明本身不可信，比静默交出一份加总对不上的数据更诚实。
+        # path 留空表示这是脚本自身的问题，不是被审计项目的某一行。
+        _h = set(SCANNER_HINT_IDS); _c = set(SCANNER_CONTEXT_IDS)
+        got = len(SCANNER_HINT_IDS) + len(SCANNER_CONTEXT_IDS) + len(SCANNER_NO_SIGNAL_IDS)
+        if _h & _c or got != len(ALL_INVARIANT_IDS):
+            result.errors.append({
+                "path": "",
+                "error": "scanner_coverage 划分不自洽%s，与骨架合计 %d 应为 %d；"
+                         "扫描结果照常产出，但 scanner_coverage 字段不可信，覆盖率不要引用"
+                         % ("" if not (_h & _c) else "（hint_ids 与 context_ids 重叠 %s）"
+                            % sorted(_h & _c), got, len(ALL_INVARIANT_IDS))})
         d.pop("_fw_seen", None)
         d.pop("_cl_seen", None)
         emit(json.dumps(d, ensure_ascii=False, indent=2))
